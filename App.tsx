@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink } from 'lucide-react';
+import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save } from 'lucide-react';
 import { fetchYahooData } from './services/yahooService';
 import { LeagueData, ViewState } from './types';
 import { HistoryChart } from './components/HistoryChart';
@@ -14,8 +14,7 @@ import { TransactionLog } from './components/TransactionLog';
 // IMPORTANT: To make the "Connect" button work, you must:
 // 1. Create an App at https://developer.yahoo.com/apps/
 // 2. Set 'Redirect URI' to the exact URL shown in the 'Advanced' section below.
-// 3. Paste your Client ID below OR set VITE_YAHOO_CLIENT_ID in your environment variables.
-const YAHOO_CLIENT_ID = process.env.YAHOO_CLIENT_ID || 'dj0yJmk9eVhxVnVLWHVRckdPJmQ9WVdrOVNUUnVkbWxIUWxjbWNHbzlNQT09JnM9Y29uc3VtZXJzZWNyZXQmc3Y9MCZ4PTY2'; 
+// 3. Paste your Client ID below OR set VITE_YAHOO_CLIENT_ID in your environment variables OR enter it in the UI.
 
 const App: React.FC = () => {
   const [view, setView] = useState<ViewState>(ViewState.DASHBOARD);
@@ -23,6 +22,10 @@ const App: React.FC = () => {
   
   // Auth State
   const [token, setToken] = useState<string>(localStorage.getItem('yahoo_token') || '');
+  const [clientId, setClientId] = useState<string>(() => {
+    // Priority: Local Storage > Environment Variable > Empty
+    return localStorage.getItem('yahoo_client_id') || process.env.YAHOO_CLIENT_ID || '';
+  });
   
   // UI State
   const [loading, setLoading] = useState(false);
@@ -47,6 +50,13 @@ const App: React.FC = () => {
       loadData(token);
     }
   }, []);
+
+  // Save Client ID when changed
+  const handleClientIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVal = e.target.value;
+    setClientId(newVal);
+    localStorage.setItem('yahoo_client_id', newVal);
+  };
 
   const loadData = async (accessToken: string) => {
     setLoading(true);
@@ -81,11 +91,11 @@ const App: React.FC = () => {
   };
 
   const getAuthUrl = () => {
-    if (!YAHOO_CLIENT_ID) return '#';
+    if (!clientId) return '#';
     // Construct OAuth URL (Implicit Flow)
     const redirectUri = getRedirectUri();
     const scope = 'fspt-r'; // Fantasy Sports Read
-    return `https://api.login.yahoo.com/oauth2/request_auth?client_id=${YAHOO_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${scope}`;
+    return `https://api.login.yahoo.com/oauth2/request_auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${scope}`;
   };
 
   // --- Login / Auth Screen ---
@@ -118,14 +128,14 @@ const App: React.FC = () => {
 
           {/* Main Action */}
           <div className="flex flex-col items-center gap-6 w-full max-w-xs">
-            {!YAHOO_CLIENT_ID ? (
-              <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-xl text-left w-full animate-in fade-in slide-in-from-top-2">
+            {!clientId ? (
+              <div className="bg-orange-500/10 border border-orange-500/50 p-4 rounded-xl text-left w-full animate-in fade-in slide-in-from-top-2">
                 <div className="flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                  <Settings className="w-5 h-5 text-orange-400 shrink-0 mt-0.5" />
                   <div>
-                    <h4 className="font-bold text-red-400 text-sm">Configuration Missing</h4>
-                    <p className="text-xs text-red-300/80 mt-1">
-                      You need to add your <code>YAHOO_CLIENT_ID</code> to the top of <code>App.tsx</code>.
+                    <h4 className="font-bold text-orange-400 text-sm">Setup Required</h4>
+                    <p className="text-xs text-orange-300/80 mt-1">
+                      Open <b>Advanced Configuration</b> below and enter your Yahoo Client ID to continue.
                     </p>
                   </div>
                 </div>
@@ -162,9 +172,27 @@ const App: React.FC = () => {
             {showManualInput && (
               <div className="w-full space-y-6 animate-in fade-in slide-in-from-top-2 bg-slate-800/80 p-4 rounded-xl border border-slate-700 backdrop-blur-sm text-left">
                 
-                {/* Configuration Help */}
-                <div className="space-y-2">
-                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Detected Redirect URI</label>
+                {/* Client ID Configuration */}
+                 <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Yahoo Client ID</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={clientId}
+                      onChange={handleClientIdChange}
+                      className="block w-full bg-black/30 border border-slate-600 rounded-lg py-2 px-3 text-xs text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-transparent transition-all"
+                      placeholder="Paste Client ID from Yahoo Developer Console"
+                    />
+                    {clientId && <CheckCircle2 className="absolute right-3 top-2 w-4 h-4 text-emerald-500" />}
+                  </div>
+                  <p className="text-[10px] text-slate-500 leading-snug">
+                     Required. Found in your Yahoo Developer App details.
+                  </p>
+                </div>
+
+                {/* Redirect URI Help */}
+                <div className="space-y-2 pt-2 border-t border-slate-700/50">
+                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Required Redirect URI</label>
                    <div className="flex items-center gap-2 bg-black/30 p-2 rounded-lg border border-slate-700/50">
                       <code className="text-[10px] text-emerald-400 font-mono break-all flex-1">
                         {getRedirectUri()}
@@ -178,17 +206,17 @@ const App: React.FC = () => {
                       </button>
                    </div>
                    <p className="text-[10px] text-slate-500 leading-snug">
-                     Copy this URL and paste it exactly into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a> as the Redirect URI.
+                     Copy this URL and paste it exactly into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a>.
                    </p>
                 </div>
 
                 <div className="border-t border-slate-700/50 pt-4">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Manual Token Entry</label>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Manual Token Entry (Fallback)</label>
                   
                   {/* Fallback Link */}
                   <div className="mb-4 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-lg">
                     <p className="text-[10px] text-indigo-300 mb-2 leading-relaxed">
-                        <b>Preview Environment Restriction?</b> If the direct connection is blocked by the browser, use this external tool to generate a token, then paste it below:
+                        If the direct connection is blocked, use this tool to generate a token, then paste it below:
                     </p>
                     <a 
                         href="https://lemon-dune-0cd4b231e.azurestaticapps.net/" 
