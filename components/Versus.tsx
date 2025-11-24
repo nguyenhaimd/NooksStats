@@ -101,7 +101,10 @@ export const Versus: React.FC<VersusProps> = ({ data, token }) => {
       const keysA = comparison.commonSeasons.map(cs => cs.teamKeyA).filter(k => !!k);
       
       if (keysA.length === 0) {
-        throw new Error("No shared seasons found with valid data.");
+        // Technically this happens if they never played in the same season, 
+        // but the UI should probably prevent this.
+        setH2hStats({ wins: 0, losses: 0, ties: 0, games: [] });
+        return;
       }
 
       // 2. Fetch Matchups
@@ -120,6 +123,8 @@ export const Versus: React.FC<VersusProps> = ({ data, token }) => {
 
         // Does oppTeam key match Manager B's key for this season?
         const matchingSeason = comparison.commonSeasons.find(cs => cs.teamKeyA === m.teamKey);
+        
+        // IMPORTANT: Validate matchingSeason exists and matches the opponent key
         if (matchingSeason && matchingSeason.teamKeyB === oppTeam.team_key) {
            // FOUND A MATCHUP!
            const myScore = parseFloat(myTeam.team_points.total);
@@ -149,7 +154,7 @@ export const Versus: React.FC<VersusProps> = ({ data, token }) => {
 
     } catch (e: any) {
       console.error("Failed to load H2H", e);
-      setH2hError("Could not retrieve detailed matchup history. This may be due to league privacy settings or archived data access limitations.");
+      setH2hError("Could not retrieve detailed matchup history. This may be due to API timeouts or league privacy settings.");
     } finally {
       setH2hLoading(false);
     }
@@ -331,25 +336,30 @@ export const Versus: React.FC<VersusProps> = ({ data, token }) => {
                    <div className="bg-slate-900/50 rounded-lg p-4 max-h-48 overflow-y-auto custom-scrollbar text-left border border-slate-700/50">
                       <h4 className="text-xs font-bold text-slate-400 uppercase mb-3 sticky top-0 bg-slate-900 pb-2 border-b border-slate-800">Recent Games</h4>
                       <div className="space-y-2">
-                        {h2hStats.games.map((g, idx) => (
-                           <div key={idx} className="flex justify-between items-center text-sm p-2 hover:bg-slate-800 rounded transition-colors">
-                              <span className="text-slate-500 font-mono text-xs">{g.year} Wk {g.week}</span>
-                              <div className="flex gap-3 font-mono">
-                                 <span className={g.result === 'W' ? 'text-indigo-400 font-bold' : 'text-slate-400'}>
-                                   {g.myScore.toFixed(1)}
-                                 </span>
-                                 <span className="text-slate-600">-</span>
-                                 <span className={g.result === 'L' ? 'text-purple-400 font-bold' : 'text-slate-400'}>
-                                   {g.oppScore.toFixed(1)}
+                        {h2hStats.games.length === 0 ? (
+                           <div className="text-center text-slate-500 text-sm py-4">No direct matchups found.</div>
+                        ) : (
+                           h2hStats.games.map((g, idx) => (
+                              <div key={idx} className="flex justify-between items-center text-sm p-2 hover:bg-slate-800 rounded transition-colors">
+                                 <span className="text-slate-500 font-mono text-xs">{g.year} Wk {g.week}</span>
+                                 <div className="flex gap-3 font-mono">
+                                    <span className={g.result === 'W' ? 'text-indigo-400 font-bold' : 'text-slate-400'}>
+                                      {g.myScore.toFixed(1)}
+                                    </span>
+                                    <span className="text-slate-600">-</span>
+                                    <span className={g.result === 'L' ? 'text-purple-400 font-bold' : 'text-slate-400'}>
+                                      {g.oppScore.toFixed(1)}
+                                    </span>
+                                 </div>
+                                 <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                    g.result === 'W' ? 'bg-emerald-500/10 text-emerald-400' : 
+                                    g.result === 'L' ? 'bg-red-500/10 text-red-400' : 'bg-slate-500/10 text-slate-400'
+                                 }`}>
+                                    {g.result}
                                  </span>
                               </div>
-                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                                 g.result === 'W' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                              }`}>
-                                 {g.result}
-                              </span>
-                           </div>
-                        ))}
+                           ))
+                        )}
                       </div>
                    </div>
                 </div>

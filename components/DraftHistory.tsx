@@ -12,6 +12,7 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
   const [selectedYear, setSelectedYear] = useState<number>(data.seasons[data.seasons.length - 1].year);
   const [searchTerm, setSearchTerm] = useState('');
   const [playerNames, setPlayerNames] = useState<Record<string, string>>({});
+  const [failedKeys, setFailedKeys] = useState<Set<string>>(new Set());
   const [loadingNames, setLoadingNames] = useState(false);
 
   const availableYears = data.seasons.map(s => s.year).sort((a, b) => b - a);
@@ -23,17 +24,32 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
       if (!activeSeason || !activeSeason.draft || !token) return;
       
       const missingKeys = activeSeason.draft
-        .filter(p => p.playerKey && !playerNames[p.playerKey])
+        .filter(p => p.playerKey && !playerNames[p.playerKey] && !failedKeys.has(p.playerKey))
         .map(p => p.playerKey as string);
 
       if (missingKeys.length > 0) {
         setLoadingNames(true);
         try {
           // Check if it's mock data or real data
-          if (missingKeys[0].startsWith('mock')) return;
+          if (missingKeys[0].startsWith('mock')) {
+             setLoadingNames(false);
+             return;
+          }
 
           const newNames = await fetchPlayerDetails(token, missingKeys);
           setPlayerNames(prev => ({ ...prev, ...newNames }));
+          
+          // Mark keys that weren't returned as failed so we don't loop
+          const returnedKeys = Object.keys(newNames);
+          const nowFailed = missingKeys.filter(k => !returnedKeys.includes(k));
+          if (nowFailed.length > 0) {
+              setFailedKeys(prev => {
+                  const next = new Set(prev);
+                  nowFailed.forEach(k => next.add(k));
+                  return next;
+              });
+          }
+
         } catch (e) {
           console.error("Failed to load player names", e);
         } finally {
@@ -122,6 +138,8 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
               {filteredPicks.map((pick) => {
                  const mgr = data.managers.find(m => m.id === pick.managerId);
                  const resolvedName = pick.playerKey ? playerNames[pick.playerKey] : null;
+                 // If we have a key, haven't resolved it, and haven't failed yet -> Loading
+                 const isLoading = pick.playerKey && !resolvedName && !failedKeys.has(pick.playerKey);
                  
                  return (
                    <tr key={`${pick.round}-${pick.pick}`} className="hover:bg-slate-700/30 transition-colors">
@@ -140,12 +158,11 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
                      <td className="px-6 py-4 text-slate-300">
                         {resolvedName ? (
                            <span className="text-white font-medium">{resolvedName}</span>
+                        ) : isLoading ? (
+                           <span className="text-slate-500 italic text-xs">Loading...</span>
                         ) : (
-                           pick.player.includes('Player #') ? (
-                               <span className="text-slate-500 italic text-xs">Loading... ({pick.playerKey})</span>
-                           ) : (
-                               <span>{pick.player}</span>
-                           )
+                           // Fallback to original "Player #..." or just the ID if failed
+                           <span>{pick.player}</span>
                         )}
                      </td>
                    </tr>

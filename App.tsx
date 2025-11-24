@@ -14,8 +14,8 @@ import { TransactionLog } from './components/TransactionLog';
 // IMPORTANT: To make the "Connect" button work, you must:
 // 1. Create an App at https://developer.yahoo.com/apps/
 // 2. Set 'Redirect URI' to the exact URL shown in the 'Advanced' section below.
-// 3. Paste your Client ID below.
-const YAHOO_CLIENT_ID = 'dj0yJmk9eVhxVnVLWHVRckdPJmQ9WVdrOVNUUnVkbWxIUWxjbWNHbzlNQT09JnM9Y29uc3VtZXJzZWNyZXQmc3Y9MCZ4PTY2'; 
+// 3. Paste your Client ID below OR set VITE_YAHOO_CLIENT_ID in your environment variables.
+const YAHOO_CLIENT_ID = process.env.YAHOO_CLIENT_ID || 'dj0yJmk9eVhxVnVLWHVRckdPJmQ9WVdrOVNUUnVkbWxIUWxjbWNHbzlNQT09JnM9Y29uc3VtZXJzZWNyZXQmc3Y9MCZ4PTY2'; 
 
 const App: React.FC = () => {
   const [view, setView] = useState<ViewState>(ViewState.DASHBOARD);
@@ -109,7 +109,7 @@ const App: React.FC = () => {
 
           {/* Headlines */}
           <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight mb-6 drop-shadow-xl">
-            Fantasy League <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Legacy</span>
+            NooKs Fantasy League <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Legacy</span>
           </h1>
           <p className="text-xl text-slate-300 max-w-2xl mx-auto mb-12 leading-relaxed">
             The ultimate historical archive for your Yahoo Fantasy Football league. 
@@ -178,7 +178,7 @@ const App: React.FC = () => {
                       </button>
                    </div>
                    <p className="text-[10px] text-slate-500 leading-snug">
-                     Copy this URL and paste it exactly into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a> as the Redirect URI to fix "Uh oh" errors.
+                     Copy this URL and paste it exactly into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a> as the Redirect URI.
                    </p>
                 </div>
 
@@ -306,7 +306,7 @@ const App: React.FC = () => {
               <div className="bg-indigo-600 p-1.5 rounded-lg">
                 <Trophy className="w-5 h-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white tracking-tight hidden sm:block">The Lightning Bolts</span>
+              <span className="text-lg font-bold text-white tracking-tight hidden sm:block">NooKs Fantasy League Legacy</span>
             </div>
             
             <div className="flex items-center gap-1 overflow-x-auto no-scrollbar px-4">

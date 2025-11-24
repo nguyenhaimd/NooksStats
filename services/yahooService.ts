@@ -50,33 +50,48 @@ export const fetchPlayerDetails = async (accessToken: string, playerKeys: string
   const uniqueKeys = Array.from(new Set(playerKeys));
   if (uniqueKeys.length === 0) return {};
 
+  const map: Record<string, string> = {};
+  
+  // Yahoo allows up to 25 keys per request.
   const chunks = [];
-  // Batch size 25
   for (let i = 0; i < uniqueKeys.length; i += 25) {
     chunks.push(uniqueKeys.slice(i, i + 25));
   }
 
-  const map: Record<string, string> = {};
-
   await Promise.all(chunks.map(async (chunk) => {
     const keysStr = chunk.join(',');
     const url = `${BASE_URL}/players;player_keys=${keysStr}?format=json`;
+    
     try {
         const res = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
              headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+            console.error(`Failed to fetch players chunk: ${res.status}`);
+            return;
+        }
         const json = await res.json();
         const players = json?.fantasy_content?.players;
+        
         if (!players || !players.count) return;
         
+        // Yahoo returns an object where keys are "0", "1", etc. plus "count"
         for (let i = 0; i < players.count; i++) {
-           const pArr = players[i]?.player;
+           const pObj = players[i + ""]; // Explicit string conversion for index
+           const pArr = pObj?.player;
            if (!pArr) continue;
-           const pKey = pArr[0]?.find((x:any) => x.player_key)?.player_key;
-           const pName = pArr[0]?.find((x:any) => x.name)?.name?.full;
-           if (pKey && pName) {
-             map[pKey] = pName;
+           
+           // pArr[0] is typically the metadata array
+           // We look for the object containing 'name'
+           const metaArr = Array.isArray(pArr) ? pArr[0] : null;
+           
+           if (Array.isArray(metaArr)) {
+             const pKeyInfo = metaArr.find((x:any) => x.player_key);
+             const pNameInfo = metaArr.find((x:any) => x.name);
+             
+             if (pKeyInfo?.player_key && pNameInfo?.name?.full) {
+               map[pKeyInfo.player_key] = pNameInfo.name.full;
+             }
            }
         }
     } catch(e) { console.error("Error fetching players", e); }
@@ -87,22 +102,51 @@ export const fetchPlayerDetails = async (accessToken: string, playerKeys: string
 
 export const fetchMatchups = async (accessToken: string, teamKeys: string[]) => {
   // Filter out empty or invalid keys to prevent API errors
-  const validKeys = teamKeys.filter(k => k && k.trim().length > 0);
+  // Ensure key structure looks like "123.l.456.t.7"
+  const validKeys = teamKeys.filter(k => k && k.includes('.t.'));
   
   if (validKeys.length === 0) return [];
   
-  // Yahoo batch limit is 25.
-  const keysStr = validKeys.slice(0, 25).join(',');
-  const targetUrl = `${BASE_URL}/teams;team_keys=${keysStr}/matchups?format=json`;
+  // Yahoo batch limit is technically 25, but fetching matchups is heavy.
+  // Reducing batch size to 5 to avoid timeouts and header size issues.
+  const BATCH_SIZE = 5;
+  const chunks = [];
+  for(let i=0; i<validKeys.length; i+=BATCH_SIZE) {
+      chunks.push(validKeys.slice(i, i+BATCH_SIZE));
+  }
 
-  const response = await fetch(`${PROXY_URL}${encodeURIComponent(targetUrl)}`, {
-    headers: { 'Authorization': `Bearer ${accessToken}` }
-  });
+  const allResults: any[] = [];
 
-  if (!response.ok) throw new Error("Failed to fetch matchups");
+  for (const chunk of chunks) {
+    const keysStr = chunk.join(',');
+    const targetUrl = `${BASE_URL}/teams;team_keys=${keysStr}/matchups?format=json`;
+
+    try {
+      const response = await fetch(`${PROXY_URL}${encodeURIComponent(targetUrl)}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+
+      if (!response.ok) {
+        console.warn(`Matchup batch failed with status ${response.status}`);
+        continue; 
+      }
+      
+      const json = await response.json();
+      const batchResults = parseMatchups(json);
+      allResults.push(...batchResults);
+      
+    } catch (e) {
+      console.error("Matchup fetch error", e);
+      // Continue to next chunk even if one fails
+    }
+  }
+
+  if (allResults.length === 0 && validKeys.length > 0) {
+     // If we failed completely, we might want to throw or just return empty
+     console.warn("No matchups retrieved despite valid keys.");
+  }
   
-  const json = await response.json();
-  return parseMatchups(json);
+  return allResults;
 };
 
 const parseMatchups = (json: any) => {
@@ -113,15 +157,18 @@ const parseMatchups = (json: any) => {
   const count = teamsObj.count;
 
   for (let i = 0; i < count; i++) {
-    const teamWrapper = teamsObj[i]?.team;
+    const teamWrapper = teamsObj[i + ""]?.team; // Use string index
     if (!teamWrapper) continue;
 
-    const teamKey = teamWrapper[0]?.find((x: any) => x.team_key)?.team_key;
+    const teamMeta = teamWrapper[0];
+    const teamKey = teamMeta?.find((x: any) => x.team_key)?.team_key;
+    
+    // Matchups are usually at index 1 or found via property
     const matchupsNode = teamWrapper.find((x: any) => x.matchups)?.matchups;
     
     if (matchupsNode && matchupsNode.count) {
       for (let m = 0; m < matchupsNode.count; m++) {
-         const match = matchupsNode[m]?.matchup;
+         const match = matchupsNode[m + ""]?.matchup; // Use string index
          if (match) {
             results.push({
               teamKey,
@@ -151,7 +198,7 @@ const transformYahooData = (data: any): LeagueData => {
   const count = leaguesObj.count;
   
   for (let i = 0; i < count; i++) {
-    const leagueData = leaguesObj[i]?.league;
+    const leagueData = leaguesObj[i + ""]?.league;
     if (!leagueData) continue;
 
     // 1. Metadata
@@ -171,7 +218,7 @@ const transformYahooData = (data: any): LeagueData => {
     if (standingsData) {
       const teamCount = standingsData.count;
       for (let j = 0; j < teamCount; j++) {
-        const teamWrapper = standingsData[j]?.team;
+        const teamWrapper = standingsData[j + ""]?.team;
         if (!teamWrapper) continue;
 
         const teamMeta = teamWrapper[0];
@@ -244,7 +291,7 @@ const transformYahooData = (data: any): LeagueData => {
     if (draftNode && draftNode.draft_results) {
       const draftCount = draftNode.draft_results.count;
       for (let d = 0; d < draftCount; d++) {
-        const pickObj = draftNode.draft_results[d]?.draft_result;
+        const pickObj = draftNode.draft_results[d + ""]?.draft_result;
         if (!pickObj) continue;
         
         const tKey = pickObj.team_key;
@@ -268,7 +315,7 @@ const transformYahooData = (data: any): LeagueData => {
       const txnObj = transactionsNode.transactions;
       const txnCount = txnObj.count;
       for(let t=0; t<txnCount; t++) {
-        const txn = txnObj[t]?.transaction;
+        const txn = txnObj[t + ""]?.transaction;
         if(!txn) continue;
         
         // Extract metadata
@@ -283,7 +330,7 @@ const transformYahooData = (data: any): LeagueData => {
 
         if (playersNode) {
            for(let p=0; p<playersNode.count; p++) {
-              const pData = playersNode[p]?.player;
+              const pData = playersNode[p + ""]?.player;
               if(!pData) continue;
               
               const pInfo = pData[0]; // metadata
