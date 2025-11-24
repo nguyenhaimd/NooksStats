@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw } from 'lucide-react';
 import { fetchYahooData } from './services/yahooService';
 import { LeagueData, ViewState } from './types';
@@ -25,11 +25,6 @@ const generateCodeChallenge = async (verifier: string) => {
 };
 
 // --- CONFIGURATION ---
-// IMPORTANT: To make the "Connect" button work, you must:
-// 1. Create an App at https://developer.yahoo.com/apps/
-// 2. Set 'Redirect URI' to the exact URL shown in the 'Advanced' section below.
-// 3. Paste your Client ID below OR set VITE_YAHOO_CLIENT_ID in your environment variables OR enter it in the UI.
-
 const App: React.FC = () => {
   const [view, setView] = useState<ViewState>(ViewState.DASHBOARD);
   const [data, setData] = useState<LeagueData | null>(null);
@@ -50,12 +45,17 @@ const App: React.FC = () => {
 
   // UI State
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>('Loading...');
   const [error, setError] = useState<string | null>(null);
   const [showManualInput, setShowManualInput] = useState(false);
+
+  // Refs for Strict Mode / Double-Invoke prevention
+  const authProcessedRef = useRef(false);
 
   // Data Loading Function
   const loadData = async (accessToken: string) => {
     setLoading(true);
+    setLoadingMessage('Syncing League Data...');
     setError(null);
     try {
       const yahooData = await fetchYahooData(accessToken);
@@ -76,18 +76,34 @@ const App: React.FC = () => {
     }
   };
 
-  // Auth Effect: Handle Redirects and Token Exchange
+  // Auth Effect: Handle Redirects, Token Exchange, and Cross-Tab Sync
   useEffect(() => {
+    // 1. Cross-Tab / Popup Synchronization
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'yahoo_token' && e.newValue) {
+        console.log("Detected token in another tab. Syncing...");
+        setToken(e.newValue);
+        loadData(e.newValue);
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    // 2. Auth Logic
     const handleAuth = async () => {
-      // 1. Check for Authorization Code (PKCE Flow)
+      // Check for Authorization Code (PKCE Flow)
       const urlParams = new URLSearchParams(window.location.search);
       const code = urlParams.get('code');
       
-      if (code) {
+      // Prevent double-processing in Strict Mode
+      if (code && !authProcessedRef.current) {
+        authProcessedRef.current = true;
+        
         const verifier = localStorage.getItem('yahoo_code_verifier');
         if (verifier && clientId) {
           setLoading(true);
-          // Clean URL immediately
+          setLoadingMessage('Authenticating with Yahoo...');
+          
+          // Clean URL immediately to prevent code reuse attempts on refresh
           window.history.replaceState(null, '', window.location.pathname);
           
           try {
@@ -109,10 +125,25 @@ const App: React.FC = () => {
             
             const json = await res.json();
             if (json.access_token) {
-              setToken(json.access_token);
-              localStorage.setItem('yahoo_token', json.access_token);
+              const newToken = json.access_token;
+              
+              setToken(newToken);
+              localStorage.setItem('yahoo_token', newToken);
               localStorage.removeItem('yahoo_code_verifier'); // Cleanup
-              loadData(json.access_token);
+
+              // Handle Popup Case: If opened in popup, update opener and close self
+              if (window.opener) {
+                try {
+                   // Try writing to opener's storage (same origin) or postMessage
+                   window.opener.postMessage({ type: 'YAHOO_AUTH_SUCCESS', token: newToken }, window.location.origin);
+                   window.close();
+                   return;
+                } catch (e) {
+                   console.warn("Could not communicate with opener window", e);
+                }
+              }
+
+              loadData(newToken);
             } else {
               throw new Error(json.error_description || 'Failed to exchange token. Check Client ID and Redirect URI.');
             }
@@ -121,11 +152,13 @@ const App: React.FC = () => {
              setError(err.message || "Token exchange failed");
              setLoading(false);
           }
-          return; // Stop processing other checks
+        } else {
+           console.warn("Found code but no verifier or client ID. Session may have expired.");
         }
+        return; // Stop processing other checks if code was present
       }
 
-      // 2. Check for Implicit Flow (Legacy/Manual)
+      // 3. Check for Implicit Flow (Legacy/Manual)
       const hash = window.location.hash;
       if (hash && hash.includes('access_token')) {
         const params = new URLSearchParams(hash.substring(1)); // remove #
@@ -139,13 +172,30 @@ const App: React.FC = () => {
         }
       } 
       
-      // 3. Check Local Storage
-      if (token && !data && !loading && !error) {
+      // 4. Check Local Storage (Persisted Session)
+      if (token && !data && !loading && !error && !code) {
         loadData(token);
       }
     };
 
     handleAuth();
+
+    // Listener for popup messages
+    const handleMessage = (event: MessageEvent) => {
+       if (event.origin !== window.location.origin) return;
+       if (event.data?.type === 'YAHOO_AUTH_SUCCESS' && event.data?.token) {
+          console.log("Received auth token from popup");
+          setToken(event.data.token);
+          localStorage.setItem('yahoo_token', event.data.token);
+          loadData(event.data.token);
+       }
+    };
+    window.addEventListener('message', handleMessage);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('message', handleMessage);
+    };
   }, []); // Run once on mount
 
   // Initiate Login with PKCE
@@ -381,8 +431,8 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-slate-500 gap-4">
         <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
-        <p className="animate-pulse font-medium">Syncing with Yahoo Fantasy API...</p>
-        <p className="text-xs text-slate-600">Downloading Standings, Drafts, and Transactions...</p>
+        <p className="animate-pulse font-medium text-white">{loadingMessage}</p>
+        <p className="text-xs text-slate-600">Please wait while we crunch the numbers...</p>
       </div>
     );
   }
