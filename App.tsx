@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save } from 'lucide-react';
+import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw } from 'lucide-react';
 import { fetchYahooData } from './services/yahooService';
 import { LeagueData, ViewState } from './types';
 import { HistoryChart } from './components/HistoryChart';
@@ -22,11 +22,18 @@ const App: React.FC = () => {
   
   // Auth State
   const [token, setToken] = useState<string>(localStorage.getItem('yahoo_token') || '');
+  
+  // Configuration State
   const [clientId, setClientId] = useState<string>(() => {
-    // Priority: Local Storage > Environment Variable > Empty
     return localStorage.getItem('yahoo_client_id') || process.env.YAHOO_CLIENT_ID || '';
   });
   
+  const [redirectUri, setRedirectUri] = useState<string>(() => {
+    // Default to current location without hash, and strip trailing slash for consistency
+    const defaultUri = window.location.href.split('#')[0].replace(/\/$/, '');
+    return localStorage.getItem('yahoo_redirect_uri') || defaultUri;
+  });
+
   // UI State
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,11 +58,25 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Save Client ID when changed
+  // Save Configuration Changes
   const handleClientIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVal = e.target.value;
     setClientId(newVal);
     localStorage.setItem('yahoo_client_id', newVal);
+  };
+
+  const handleRedirectUriChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVal = e.target.value;
+    setRedirectUri(newVal);
+    localStorage.setItem('yahoo_redirect_uri', newVal);
+  };
+
+  const resetConfig = () => {
+    localStorage.removeItem('yahoo_client_id');
+    localStorage.removeItem('yahoo_redirect_uri');
+    setClientId('');
+    setRedirectUri(window.location.href.split('#')[0].replace(/\/$/, ''));
+    setShowManualInput(true);
   };
 
   const loadData = async (accessToken: string) => {
@@ -85,15 +106,10 @@ const App: React.FC = () => {
     if (token) loadData(token);
   };
 
-  // Helper to ensure we send the exact URI the browser is currently on, minus trailing slashes
-  const getRedirectUri = () => {
-    return window.location.href.split('#')[0].replace(/\/$/, '');
-  };
-
   const getAuthUrl = () => {
     if (!clientId) return '#';
     // Construct OAuth URL (Implicit Flow)
-    const redirectUri = getRedirectUri();
+    // Use the user-configurable redirect URI
     const scope = 'fspt-r'; // Fantasy Sports Read
     return `https://api.login.yahoo.com/oauth2/request_auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${scope}`;
   };
@@ -127,7 +143,7 @@ const App: React.FC = () => {
           </p>
 
           {/* Main Action */}
-          <div className="flex flex-col items-center gap-6 w-full max-w-xs">
+          <div className="flex flex-col items-center gap-6 w-full max-w-sm">
             {!clientId ? (
               <div className="bg-orange-500/10 border border-orange-500/50 p-4 rounded-xl text-left w-full animate-in fade-in slide-in-from-top-2">
                 <div className="flex items-start gap-3">
@@ -172,6 +188,13 @@ const App: React.FC = () => {
             {showManualInput && (
               <div className="w-full space-y-6 animate-in fade-in slide-in-from-top-2 bg-slate-800/80 p-4 rounded-xl border border-slate-700 backdrop-blur-sm text-left">
                 
+                <div className="flex justify-between items-center mb-2">
+                   <h3 className="text-xs font-bold text-white uppercase tracking-wider">Configuration</h3>
+                   <button onClick={resetConfig} className="text-[10px] text-red-400 hover:text-red-300 flex items-center gap-1">
+                      <RotateCcw className="w-3 h-3" /> Reset
+                   </button>
+                </div>
+
                 {/* Client ID Configuration */}
                  <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Yahoo Client ID</label>
@@ -190,23 +213,26 @@ const App: React.FC = () => {
                   </p>
                 </div>
 
-                {/* Redirect URI Help */}
+                {/* Redirect URI Configuration */}
                 <div className="space-y-2 pt-2 border-t border-slate-700/50">
-                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Required Redirect URI</label>
-                   <div className="flex items-center gap-2 bg-black/30 p-2 rounded-lg border border-slate-700/50">
-                      <code className="text-[10px] text-emerald-400 font-mono break-all flex-1">
-                        {getRedirectUri()}
-                      </code>
+                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Redirect URI (Match Exact)</label>
+                   <div className="relative">
+                      <input
+                        type="text"
+                        value={redirectUri}
+                        onChange={handleRedirectUriChange}
+                        className="block w-full bg-black/30 border border-slate-600 rounded-lg py-2 px-3 text-xs text-emerald-400 font-mono placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-transparent transition-all"
+                      />
                       <button 
-                        onClick={() => navigator.clipboard.writeText(getRedirectUri())}
-                        className="text-slate-500 hover:text-white"
+                        onClick={() => navigator.clipboard.writeText(redirectUri)}
+                        className="absolute right-2 top-1.5 text-slate-500 hover:text-white bg-slate-800 p-1 rounded"
                         title="Copy to clipboard"
                       >
                          <Copy className="w-3 h-3" />
                       </button>
                    </div>
                    <p className="text-[10px] text-slate-500 leading-snug">
-                     Copy this URL and paste it exactly into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a>.
+                     <b>Crucial:</b> Copy this exact URL and paste it into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a> under "Redirect URI(s)". Mismatches cause the "Uh oh" error.
                    </p>
                 </div>
 
