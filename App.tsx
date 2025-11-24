@@ -10,6 +10,20 @@ import { Versus } from './components/Versus';
 import { DraftHistory } from './components/DraftHistory';
 import { TransactionLog } from './components/TransactionLog';
 
+// --- PKCE UTILITIES ---
+const generateCodeVerifier = () => {
+  const array = new Uint8Array(32);
+  window.crypto.getRandomValues(array);
+  return btoa(String.fromCharCode(...array)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+const generateCodeChallenge = async (verifier: string) => {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const digest = await window.crypto.subtle.digest('SHA-256', data);
+  return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
 // --- CONFIGURATION ---
 // IMPORTANT: To make the "Connect" button work, you must:
 // 1. Create an App at https://developer.yahoo.com/apps/
@@ -30,7 +44,7 @@ const App: React.FC = () => {
   
   const [redirectUri, setRedirectUri] = useState<string>(() => {
     // Default to current location without hash, and strip trailing slash for consistency
-    const defaultUri = window.location.href.split('#')[0].replace(/\/$/, '');
+    const defaultUri = window.location.href.split('#')[0].split('?')[0].replace(/\/$/, '');
     return localStorage.getItem('yahoo_redirect_uri') || defaultUri;
   });
 
@@ -39,46 +53,7 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showManualInput, setShowManualInput] = useState(false);
 
-  // 1. Check for Access Token in URL hash (OAuth Redirect)
-  useEffect(() => {
-    const hash = window.location.hash;
-    if (hash && hash.includes('access_token')) {
-      const params = new URLSearchParams(hash.substring(1)); // remove #
-      const accessToken = params.get('access_token');
-      if (accessToken) {
-        setToken(accessToken);
-        localStorage.setItem('yahoo_token', accessToken);
-        // Clean URL
-        window.history.replaceState(null, '', window.location.pathname);
-        loadData(accessToken);
-      }
-    } else if (token) {
-      // If we already have a token stored, try to load data
-      loadData(token);
-    }
-  }, []);
-
-  // Save Configuration Changes
-  const handleClientIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newVal = e.target.value;
-    setClientId(newVal);
-    localStorage.setItem('yahoo_client_id', newVal);
-  };
-
-  const handleRedirectUriChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newVal = e.target.value;
-    setRedirectUri(newVal);
-    localStorage.setItem('yahoo_redirect_uri', newVal);
-  };
-
-  const resetConfig = () => {
-    localStorage.removeItem('yahoo_client_id');
-    localStorage.removeItem('yahoo_redirect_uri');
-    setClientId('');
-    setRedirectUri(window.location.href.split('#')[0].replace(/\/$/, ''));
-    setShowManualInput(true);
-  };
-
+  // Data Loading Function
   const loadData = async (accessToken: string) => {
     setLoading(true);
     setError(null);
@@ -101,17 +76,120 @@ const App: React.FC = () => {
     }
   };
 
+  // Auth Effect: Handle Redirects and Token Exchange
+  useEffect(() => {
+    const handleAuth = async () => {
+      // 1. Check for Authorization Code (PKCE Flow)
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code');
+      
+      if (code) {
+        const verifier = localStorage.getItem('yahoo_code_verifier');
+        if (verifier && clientId) {
+          setLoading(true);
+          // Clean URL immediately
+          window.history.replaceState(null, '', window.location.pathname);
+          
+          try {
+            const body = new URLSearchParams({
+              client_id: clientId,
+              redirect_uri: redirectUri,
+              code: code,
+              grant_type: 'authorization_code',
+              code_verifier: verifier
+            });
+            
+            // Exchange code for token via Proxy to avoid CORS
+            const tokenUrl = 'https://api.login.yahoo.com/oauth2/get_token';
+            const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(tokenUrl)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: body.toString()
+            });
+            
+            const json = await res.json();
+            if (json.access_token) {
+              setToken(json.access_token);
+              localStorage.setItem('yahoo_token', json.access_token);
+              localStorage.removeItem('yahoo_code_verifier'); // Cleanup
+              loadData(json.access_token);
+            } else {
+              throw new Error(json.error_description || 'Failed to exchange token. Check Client ID and Redirect URI.');
+            }
+          } catch (err: any) {
+             console.error(err);
+             setError(err.message || "Token exchange failed");
+             setLoading(false);
+          }
+          return; // Stop processing other checks
+        }
+      }
+
+      // 2. Check for Implicit Flow (Legacy/Manual)
+      const hash = window.location.hash;
+      if (hash && hash.includes('access_token')) {
+        const params = new URLSearchParams(hash.substring(1)); // remove #
+        const accessToken = params.get('access_token');
+        if (accessToken) {
+          setToken(accessToken);
+          localStorage.setItem('yahoo_token', accessToken);
+          window.history.replaceState(null, '', window.location.pathname);
+          loadData(accessToken);
+          return;
+        }
+      } 
+      
+      // 3. Check Local Storage
+      if (token && !data && !loading && !error) {
+        loadData(token);
+      }
+    };
+
+    handleAuth();
+  }, []); // Run once on mount
+
+  // Initiate Login with PKCE
+  const handleLogin = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!clientId) return;
+
+    // Generate PKCE Verifier & Challenge
+    const verifier = generateCodeVerifier();
+    localStorage.setItem('yahoo_code_verifier', verifier);
+    const challenge = await generateCodeChallenge(verifier);
+
+    const scope = 'fspt-r'; // Fantasy Sports Read
+    
+    // Construct Auth URL (Response Type = CODE for PKCE)
+    const authUrl = `https://api.login.yahoo.com/oauth2/request_auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&code_challenge=${challenge}&code_challenge_method=S256`;
+    
+    window.location.href = authUrl;
+  };
+
+  // Configuration Handlers
+  const handleClientIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVal = e.target.value;
+    setClientId(newVal);
+    localStorage.setItem('yahoo_client_id', newVal);
+  };
+
+  const handleRedirectUriChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVal = e.target.value;
+    setRedirectUri(newVal);
+    localStorage.setItem('yahoo_redirect_uri', newVal);
+  };
+
+  const resetConfig = () => {
+    localStorage.removeItem('yahoo_client_id');
+    localStorage.removeItem('yahoo_redirect_uri');
+    setClientId('');
+    setRedirectUri(window.location.href.split('#')[0].split('?')[0].replace(/\/$/, ''));
+    setShowManualInput(true);
+  };
+
   const handleManualTokenSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (token) loadData(token);
-  };
-
-  const getAuthUrl = () => {
-    if (!clientId) return '#';
-    // Construct OAuth URL (Implicit Flow)
-    // Use the user-configurable redirect URI
-    const scope = 'fspt-r'; // Fantasy Sports Read
-    return `https://api.login.yahoo.com/oauth2/request_auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${scope}`;
   };
 
   // --- Login / Auth Screen ---
@@ -157,22 +235,20 @@ const App: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <a
-                href={getAuthUrl()}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full group relative flex items-center justify-center gap-3 bg-white text-slate-900 hover:bg-indigo-50 py-4 px-8 rounded-2xl font-bold text-lg transition-all transform hover:scale-[1.02] shadow-[0_0_40px_-10px_rgba(99,102,241,0.5)] cursor-pointer decoration-0"
+              <button
+                onClick={handleLogin}
+                className="w-full group relative flex items-center justify-center gap-3 bg-white text-slate-900 hover:bg-indigo-50 py-4 px-8 rounded-2xl font-bold text-lg transition-all transform hover:scale-[1.02] shadow-[0_0_40px_-10px_rgba(99,102,241,0.5)] cursor-pointer decoration-0 focus:outline-none focus:ring-4 focus:ring-indigo-500/50"
               >
                 <svg className="w-6 h-6 text-[#6001d2]" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm-1-7.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/> 
                 </svg>
                 Connect with Yahoo
                 <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
-              </a>
+              </button>
             )}
             
             <div className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold opacity-60">
-               (Opens in new tab)
+               (Securely connects via Yahoo OAuth)
             </div>
 
             {/* Manual Override Toggle */}
