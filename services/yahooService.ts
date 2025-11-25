@@ -1,6 +1,6 @@
 import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction, LeagueSummary } from '../types';
 
-const PROXY_URL = 'https://corsproxy.io/?';
+const PROXY_URL = 'https://api.allorigins.win/raw?url=';
 const BASE_URL = 'https://fantasysports.yahooapis.com/fantasy/v2';
 
 // Game IDs for NFL Fantasy Football from 2011 to 2025
@@ -28,6 +28,7 @@ export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSumma
   const keysString = NFL_GAME_KEYS.join(',');
   const url = `${BASE_URL}/users;use_login=1/games;game_keys=${keysString}/leagues?format=json`;
 
+  // Use allorigins for GET requests to avoid 429s on corsproxy.io for data
   const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
     headers: { 'Authorization': `Bearer ${accessToken}` }
   });
@@ -37,19 +38,20 @@ export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSumma
   const json = await response.json();
   const leagues: LeagueSummary[] = [];
   
-  const games = json?.fantasy_content?.users?.[0]?.user?.[1]?.games;
-  if (!games) return [];
+  // Robustly find the 'games' array (Yahoo structure can vary)
+  const gamesNode = json?.fantasy_content?.users?.[0]?.user?.find((x: any) => x.games)?.games;
+  if (!gamesNode) return [];
 
-  // Iterate over games (years)
-  const gameCount = games.count;
+  const gameCount = gamesNode.count;
   for (let i = 0; i < gameCount; i++) {
-    const gameWrapper = games[i + ""]?.game;
+    const gameWrapper = gamesNode[i + ""]?.game;
     if (!gameWrapper) continue;
 
     const gameMeta = gameWrapper[0];
     const seasonYear = parseInt(gameMeta.season);
     
-    const leaguesNode = gameWrapper[1]?.leagues;
+    // Robustly find the 'leagues' array inside the game wrapper
+    const leaguesNode = gameWrapper.find((x: any) => x.leagues)?.leagues;
     if (!leaguesNode) continue;
 
     const leagueCount = leaguesNode.count;

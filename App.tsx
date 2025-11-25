@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw, ListFilter, CheckSquare, Square } from 'lucide-react';
 import { fetchYahooData, fetchUserLeagues } from './services/yahooService';
 import { LeagueData, ViewState, LeagueSummary } from './types';
@@ -31,6 +31,7 @@ const App: React.FC = () => {
   
   // Auth State
   const [token, setToken] = useState<string>(localStorage.getItem('yahoo_token') || '');
+  const authAttempted = useRef(false); // Prevent double-fire in StrictMode
   
   // League Selection State
   const [availableLeagues, setAvailableLeagues] = useState<LeagueSummary[]>([]);
@@ -90,6 +91,8 @@ const App: React.FC = () => {
     try {
         const leagues = await fetchUserLeagues(accessToken);
         setAvailableLeagues(leagues);
+        // If no leagues found, warn user
+        if (leagues.length === 0) setError("No Fantasy Football leagues found in your history.");
         setShowLeagueSelector(true);
     } catch (e: any) {
         setError("Failed to load league list: " + e.message);
@@ -101,6 +104,10 @@ const App: React.FC = () => {
   // Auth Effect: Handle Redirects and Token Exchange
   useEffect(() => {
     const handleAuth = async () => {
+      // Prevent double execution in React Strict Mode
+      if (authAttempted.current) return;
+      authAttempted.current = true;
+
       // 1. Check for Authorization Code (PKCE Flow)
       const urlParams = new URLSearchParams(window.location.search);
       const code = urlParams.get('code');
@@ -121,12 +128,18 @@ const App: React.FC = () => {
             });
             
             const tokenUrl = 'https://api.login.yahoo.com/oauth2/get_token';
+            // Using corsproxy.io for POST requests
             const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(tokenUrl)}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
               body: body.toString()
             });
             
+            if (!res.ok) {
+                const errorText = await res.text();
+                throw new Error(`Token exchange failed (${res.status}): ${errorText}`);
+            }
+
             const json = await res.json();
             if (json.access_token) {
               setToken(json.access_token);
@@ -373,7 +386,7 @@ const App: React.FC = () => {
                   <div className="overflow-y-auto p-4 space-y-2 flex-1">
                       {availableLeagues.length === 0 ? (
                           <div className="text-center py-12 text-slate-500">
-                              {loading ? <Loader2 className="w-8 h-8 animate-spin mx-auto" /> : "No leagues found."}
+                              {loading ? <Loader2 className="w-8 h-8 animate-spin mx-auto" /> : error ? <div className="text-red-400">{error}</div> : "No leagues found."}
                           </div>
                       ) : (
                           availableLeagues.map(league => (
@@ -445,13 +458,21 @@ const App: React.FC = () => {
              <AlertCircle className="w-10 h-10 text-red-500" />
           </div>
           <h3 className="text-xl font-bold text-white mb-2">Connection Interrupted</h3>
-          <p className="text-slate-400 mb-8">{error}</p>
-          <button 
-            onClick={() => { setToken(''); setError(null); setShowLeagueSelector(false); }}
-            className="w-full bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-xl transition-colors font-medium"
-          >
-            Return to Login
-          </button>
+          <p className="text-slate-400 mb-8 text-sm break-words">{error}</p>
+          <div className="flex flex-col gap-3">
+             <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-xl transition-colors font-medium"
+            >
+              Retry
+            </button>
+            <button 
+              onClick={() => { setToken(''); setError(null); setShowLeagueSelector(false); localStorage.removeItem('yahoo_token'); }}
+              className="w-full bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-xl transition-colors font-medium"
+            >
+              Return to Login
+            </button>
+          </div>
         </div>
       </div>
     );
