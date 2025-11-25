@@ -141,11 +141,6 @@ export const fetchMatchups = async (accessToken: string, teamKeys: string[]) => 
     }
   }
 
-  if (allResults.length === 0 && validKeys.length > 0) {
-     // If we failed completely, we might want to throw or just return empty
-     console.warn("No matchups retrieved despite valid keys.");
-  }
-  
   return allResults;
 };
 
@@ -168,15 +163,40 @@ const parseMatchups = (json: any) => {
     
     if (matchupsNode && matchupsNode.count) {
       for (let m = 0; m < matchupsNode.count; m++) {
-         const match = matchupsNode[m + ""]?.matchup; // Use string index
-         if (match) {
+         const matchWrapper = matchupsNode[m + ""]?.matchup; // Use string index
+         if (matchWrapper) {
+            // Yahoo Matchup structure is messy. Usually:
+            // matchWrapper[0] -> metadata { week, status, is_playoffs, winner_team_key, teams: {...} }
+            const meta = matchWrapper[0];
+            const teamsNode = meta?.teams;
+
+            let parsedTeams: any[] = [];
+            
+            if (teamsNode && teamsNode.count) {
+              for(let t=0; t < teamsNode.count; t++) {
+                const teamData = teamsNode[t + ""]?.team;
+                if (teamData) {
+                  // teamData[0] -> metadata
+                  // teamData[1] -> stats (team_points)
+                  const tMeta = teamData[0];
+                  const tStats = teamData[1];
+                  
+                  parsedTeams.push({
+                    team_key: tMeta?.find((x:any) => x.team_key)?.team_key,
+                    name: tMeta?.find((x:any) => x.name)?.name,
+                    team_points: tStats?.team_points // { total: "100.00", week: "1" }
+                  });
+                }
+              }
+            }
+
             results.push({
-              teamKey,
-              week: match.week,
-              status: match.status,
-              isPlayoffs: match.is_playoffs === '1', // Yahoo sometimes provides this
-              winner_team_key: match.winner_team_key,
-              teams: match[0]?.teams // The list of 2 teams in the matchup
+              teamKey, // The key of the primary team we queried
+              week: meta?.week,
+              status: meta?.status,
+              isPlayoffs: meta?.is_playoffs === '1', 
+              winner_team_key: meta?.winner_team_key,
+              teams: parsedTeams // Now a clean array
             });
          }
       }
