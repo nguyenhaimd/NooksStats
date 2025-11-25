@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw } from 'lucide-react';
-import { fetchYahooData } from './services/yahooService';
-import { LeagueData, ViewState } from './types';
+import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw, ListFilter, CheckSquare, Square } from 'lucide-react';
+import { fetchYahooData, fetchUserLeagues } from './services/yahooService';
+import { LeagueData, ViewState, LeagueSummary } from './types';
 import { HistoryChart } from './components/HistoryChart';
 import { StandingsTable } from './components/StandingsTable';
 import { LeagueOracle } from './components/LeagueOracle';
@@ -25,11 +25,6 @@ const generateCodeChallenge = async (verifier: string) => {
 };
 
 // --- CONFIGURATION ---
-// IMPORTANT: To make the "Connect" button work, you must:
-// 1. Create an App at https://developer.yahoo.com/apps/
-// 2. Set 'Redirect URI' to the exact URL shown in the 'Advanced' section below.
-// 3. Paste your Client ID below OR set VITE_YAHOO_CLIENT_ID in your environment variables OR enter it in the UI.
-
 const App: React.FC = () => {
   const [view, setView] = useState<ViewState>(ViewState.DASHBOARD);
   const [data, setData] = useState<LeagueData | null>(null);
@@ -37,13 +32,20 @@ const App: React.FC = () => {
   // Auth State
   const [token, setToken] = useState<string>(localStorage.getItem('yahoo_token') || '');
   
+  // League Selection State
+  const [availableLeagues, setAvailableLeagues] = useState<LeagueSummary[]>([]);
+  const [selectedLeagueKeys, setSelectedLeagueKeys] = useState<string[]>(() => {
+    const saved = localStorage.getItem('selected_league_keys');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showLeagueSelector, setShowLeagueSelector] = useState(false);
+
   // Configuration State
   const [clientId, setClientId] = useState<string>(() => {
     return localStorage.getItem('yahoo_client_id') || process.env.YAHOO_CLIENT_ID || '';
   });
   
   const [redirectUri, setRedirectUri] = useState<string>(() => {
-    // Default to current location without hash, and strip trailing slash for consistency
     const defaultUri = window.location.href.split('#')[0].split('?')[0].replace(/\/$/, '');
     return localStorage.getItem('yahoo_redirect_uri') || defaultUri;
   });
@@ -54,11 +56,18 @@ const App: React.FC = () => {
   const [showManualInput, setShowManualInput] = useState(false);
 
   // Data Loading Function
-  const loadData = async (accessToken: string) => {
+  const loadData = async (accessToken: string, keys: string[]) => {
     setLoading(true);
     setError(null);
     try {
-      const yahooData = await fetchYahooData(accessToken);
+      if (keys.length === 0) {
+          // No keys selected? Trigger selection flow
+          setShowLeagueSelector(true);
+          await discoverLeagues(accessToken);
+          setLoading(false);
+          return;
+      }
+      const yahooData = await fetchYahooData(accessToken, keys);
       setData(yahooData);
       // Re-save valid token
       localStorage.setItem('yahoo_token', accessToken);
@@ -76,6 +85,19 @@ const App: React.FC = () => {
     }
   };
 
+  const discoverLeagues = async (accessToken: string) => {
+    setLoading(true);
+    try {
+        const leagues = await fetchUserLeagues(accessToken);
+        setAvailableLeagues(leagues);
+        setShowLeagueSelector(true);
+    } catch (e: any) {
+        setError("Failed to load league list: " + e.message);
+    } finally {
+        setLoading(false);
+    }
+  };
+
   // Auth Effect: Handle Redirects and Token Exchange
   useEffect(() => {
     const handleAuth = async () => {
@@ -87,7 +109,6 @@ const App: React.FC = () => {
         const verifier = localStorage.getItem('yahoo_code_verifier');
         if (verifier && clientId) {
           setLoading(true);
-          // Clean URL immediately
           window.history.replaceState(null, '', window.location.pathname);
           
           try {
@@ -99,7 +120,6 @@ const App: React.FC = () => {
               code_verifier: verifier
             });
             
-            // Exchange code for token via Proxy to avoid CORS
             const tokenUrl = 'https://api.login.yahoo.com/oauth2/get_token';
             const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(tokenUrl)}`, {
               method: 'POST',
@@ -111,59 +131,80 @@ const App: React.FC = () => {
             if (json.access_token) {
               setToken(json.access_token);
               localStorage.setItem('yahoo_token', json.access_token);
-              localStorage.removeItem('yahoo_code_verifier'); // Cleanup
-              loadData(json.access_token);
+              localStorage.removeItem('yahoo_code_verifier');
+              loadData(json.access_token, selectedLeagueKeys);
             } else {
-              throw new Error(json.error_description || 'Failed to exchange token. Check Client ID and Redirect URI.');
+              throw new Error(json.error_description || 'Failed to exchange token.');
             }
           } catch (err: any) {
              console.error(err);
              setError(err.message || "Token exchange failed");
              setLoading(false);
           }
-          return; // Stop processing other checks
+          return;
         }
       }
 
       // 2. Check for Implicit Flow (Legacy/Manual)
       const hash = window.location.hash;
       if (hash && hash.includes('access_token')) {
-        const params = new URLSearchParams(hash.substring(1)); // remove #
+        const params = new URLSearchParams(hash.substring(1));
         const accessToken = params.get('access_token');
         if (accessToken) {
           setToken(accessToken);
           localStorage.setItem('yahoo_token', accessToken);
           window.history.replaceState(null, '', window.location.pathname);
-          loadData(accessToken);
+          loadData(accessToken, selectedLeagueKeys);
           return;
         }
       } 
       
       // 3. Check Local Storage
-      if (token && !data && !loading && !error) {
-        loadData(token);
+      if (token && !data && !loading && !error && !showLeagueSelector) {
+        loadData(token, selectedLeagueKeys);
       }
     };
 
     handleAuth();
-  }, []); // Run once on mount
+  }, []);
 
   // Initiate Login with PKCE
   const handleLogin = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (!clientId) return;
 
-    // Generate PKCE Verifier & Challenge
     const verifier = generateCodeVerifier();
     localStorage.setItem('yahoo_code_verifier', verifier);
     const challenge = await generateCodeChallenge(verifier);
-
-    const scope = 'fspt-r'; // Fantasy Sports Read
-    
-    // Construct Auth URL (Response Type = CODE for PKCE)
+    const scope = 'fspt-r'; 
     const authUrl = `https://api.login.yahoo.com/oauth2/request_auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&code_challenge=${challenge}&code_challenge_method=S256`;
-    
     window.location.href = authUrl;
+  };
+
+  const handleSaveLeagues = () => {
+      if (selectedLeagueKeys.length === 0) return;
+      localStorage.setItem('selected_league_keys', JSON.stringify(selectedLeagueKeys));
+      setShowLeagueSelector(false);
+      loadData(token, selectedLeagueKeys);
+  };
+
+  const toggleLeagueSelection = (key: string) => {
+      setSelectedLeagueKeys(prev => 
+          prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      );
+  };
+
+  const toggleAllLeagues = () => {
+      if (selectedLeagueKeys.length === availableLeagues.length) {
+          setSelectedLeagueKeys([]);
+      } else {
+          setSelectedLeagueKeys(availableLeagues.map(l => l.key));
+      }
+  };
+
+  const openSettings = async () => {
+      setData(null); // Hide dashboard
+      await discoverLeagues(token); // Fetch fresh list
   };
 
   // Configuration Handlers
@@ -189,21 +230,17 @@ const App: React.FC = () => {
 
   const handleManualTokenSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (token) loadData(token);
+    if (token) loadData(token, selectedLeagueKeys);
   };
 
   // --- Login / Auth Screen ---
-  if (!token || (!data && !loading && !error)) {
+  if (!token || (!data && !loading && !error && !showLeagueSelector)) {
     return (
       <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center relative overflow-hidden">
-        {/* Dynamic Background */}
         <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1566577739112-5180d4bf939b?q=80&w=2600&auto=format&fit=crop')] bg-cover bg-center opacity-20 mix-blend-overlay pointer-events-none" />
         <div className="absolute inset-0 bg-gradient-to-b from-slate-900/80 via-slate-900/90 to-slate-900 pointer-events-none" />
         
-        {/* Content Container */}
         <div className="relative z-10 max-w-4xl w-full px-6 flex flex-col items-center text-center">
-          
-          {/* Logo / Icon */}
           <div className="mb-8 relative group">
             <div className="absolute inset-0 bg-indigo-500 blur-[60px] opacity-40 rounded-full group-hover:opacity-60 transition-opacity duration-500" />
             <div className="relative bg-slate-800/50 backdrop-blur-xl border border-slate-700 p-6 rounded-3xl shadow-2xl">
@@ -211,16 +248,13 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Headlines */}
           <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight mb-6 drop-shadow-xl">
             NooKs Fantasy League <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Legacy</span>
           </h1>
           <p className="text-xl text-slate-300 max-w-2xl mx-auto mb-12 leading-relaxed">
             The ultimate historical archive for your Yahoo Fantasy Football league. 
-            Visualize dynasties, track rivalries, and uncover the stats that matter.
           </p>
 
-          {/* Main Action */}
           <div className="flex flex-col items-center gap-6 w-full max-w-sm">
             {!clientId ? (
               <div className="bg-orange-500/10 border border-orange-500/50 p-4 rounded-xl text-left w-full animate-in fade-in slide-in-from-top-2">
@@ -247,11 +281,6 @@ const App: React.FC = () => {
               </button>
             )}
             
-            <div className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold opacity-60">
-               (Securely connects via Yahoo OAuth)
-            </div>
-
-            {/* Manual Override Toggle */}
             <button 
               onClick={() => setShowManualInput(!showManualInput)}
               className="text-slate-500 text-sm hover:text-indigo-400 transition-colors flex items-center gap-2 mt-2"
@@ -260,18 +289,14 @@ const App: React.FC = () => {
               {showManualInput ? 'Hide Advanced' : 'Advanced Configuration'}
             </button>
 
-            {/* Manual Input Form */}
             {showManualInput && (
               <div className="w-full space-y-6 animate-in fade-in slide-in-from-top-2 bg-slate-800/80 p-4 rounded-xl border border-slate-700 backdrop-blur-sm text-left">
-                
                 <div className="flex justify-between items-center mb-2">
                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Configuration</h3>
                    <button onClick={resetConfig} className="text-[10px] text-red-400 hover:text-red-300 flex items-center gap-1">
                       <RotateCcw className="w-3 h-3" /> Reset
                    </button>
                 </div>
-
-                {/* Client ID Configuration */}
                  <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Yahoo Client ID</label>
                   <div className="relative">
@@ -280,18 +305,13 @@ const App: React.FC = () => {
                       value={clientId}
                       onChange={handleClientIdChange}
                       className="block w-full bg-black/30 border border-slate-600 rounded-lg py-2 px-3 text-xs text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-transparent transition-all"
-                      placeholder="Paste Client ID from Yahoo Developer Console"
+                      placeholder="Paste Client ID"
                     />
                     {clientId && <CheckCircle2 className="absolute right-3 top-2 w-4 h-4 text-emerald-500" />}
                   </div>
-                  <p className="text-[10px] text-slate-500 leading-snug">
-                     Required. Found in your Yahoo Developer App details.
-                  </p>
                 </div>
-
-                {/* Redirect URI Configuration */}
                 <div className="space-y-2 pt-2 border-t border-slate-700/50">
-                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Redirect URI (Match Exact)</label>
+                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Redirect URI</label>
                    <div className="relative">
                       <input
                         type="text"
@@ -302,35 +322,13 @@ const App: React.FC = () => {
                       <button 
                         onClick={() => navigator.clipboard.writeText(redirectUri)}
                         className="absolute right-2 top-1.5 text-slate-500 hover:text-white bg-slate-800 p-1 rounded"
-                        title="Copy to clipboard"
+                        title="Copy"
                       >
                          <Copy className="w-3 h-3" />
                       </button>
                    </div>
-                   <p className="text-[10px] text-slate-500 leading-snug">
-                     <b>Crucial:</b> Copy this exact URL and paste it into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a> under "Redirect URI(s)". Mismatches cause the "Uh oh" error.
-                   </p>
                 </div>
-
                 <div className="border-t border-slate-700/50 pt-4">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Manual Token Entry (Fallback)</label>
-                  
-                  {/* Fallback Link */}
-                  <div className="mb-4 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-lg">
-                    <p className="text-[10px] text-indigo-300 mb-2 leading-relaxed">
-                        If the direct connection is blocked, use this tool to generate a token, then paste it below:
-                    </p>
-                    <a 
-                        href="https://lemon-dune-0cd4b231e.azurestaticapps.net/" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 px-3 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors w-full"
-                    >
-                        <ExternalLink className="w-3 h-3" />
-                        Open Token Generator
-                    </a>
-                  </div>
-
                   <form onSubmit={handleManualTokenSubmit} className="space-y-3">
                     <div className="relative group">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -355,39 +353,90 @@ const App: React.FC = () => {
               </div>
             )}
           </div>
-
-          {/* Footer Stats */}
-          <div className="mt-16 grid grid-cols-3 gap-8 text-center border-t border-slate-800 pt-8">
-             <div>
-                <div className="text-2xl font-bold text-white">Instant</div>
-                <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Sync</div>
-             </div>
-             <div>
-                <div className="text-2xl font-bold text-white">10+</div>
-                <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Years Supported</div>
-             </div>
-             <div>
-                <div className="text-2xl font-bold text-white">AI</div>
-                <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Powered Insights</div>
-             </div>
-          </div>
         </div>
       </div>
     );
   }
 
-  // --- Loading Screen ---
+  // --- League Selection Screen ---
+  if (showLeagueSelector) {
+      return (
+          <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center p-6">
+              <div className="max-w-2xl w-full bg-slate-800 rounded-2xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+                  <div className="p-6 border-b border-slate-700 bg-slate-900/50">
+                      <h2 className="text-2xl font-bold text-white mb-2">Select Leagues</h2>
+                      <p className="text-slate-400 text-sm">
+                          We found {availableLeagues.length} leagues in your history. Select the ones you want to include in your visualization.
+                      </p>
+                  </div>
+                  
+                  <div className="overflow-y-auto p-4 space-y-2 flex-1">
+                      {availableLeagues.length === 0 ? (
+                          <div className="text-center py-12 text-slate-500">
+                              {loading ? <Loader2 className="w-8 h-8 animate-spin mx-auto" /> : "No leagues found."}
+                          </div>
+                      ) : (
+                          availableLeagues.map(league => (
+                              <div 
+                                  key={league.key}
+                                  onClick={() => toggleLeagueSelection(league.key)}
+                                  className={`flex items-center justify-between p-4 rounded-xl border transition-all cursor-pointer ${
+                                      selectedLeagueKeys.includes(league.key) 
+                                      ? 'bg-indigo-600/20 border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.2)]' 
+                                      : 'bg-slate-700/30 border-slate-700 hover:bg-slate-700/50'
+                                  }`}
+                              >
+                                  <div className="flex items-center gap-4">
+                                      <div className={`w-5 h-5 rounded flex items-center justify-center border transition-colors ${
+                                          selectedLeagueKeys.includes(league.key) ? 'bg-indigo-500 border-indigo-500' : 'border-slate-500'
+                                      }`}>
+                                          {selectedLeagueKeys.includes(league.key) && <CheckSquare className="w-3.5 h-3.5 text-white" />}
+                                      </div>
+                                      <div>
+                                          <div className="font-bold text-white">{league.name}</div>
+                                          <div className="text-xs text-slate-400">{league.year} Season • ID: {league.key}</div>
+                                      </div>
+                                  </div>
+                                  {league.logo && <img src={league.logo} alt="" className="w-8 h-8 rounded-full" />}
+                              </div>
+                          ))
+                      )}
+                  </div>
+
+                  <div className="p-6 border-t border-slate-700 bg-slate-900/50 flex justify-between items-center gap-4">
+                       <button onClick={toggleAllLeagues} className="text-sm text-slate-400 hover:text-white transition-colors">
+                           {selectedLeagueKeys.length === availableLeagues.length ? 'Deselect All' : 'Select All'}
+                       </button>
+                       <div className="flex gap-3">
+                           {data && (
+                               <button onClick={() => setShowLeagueSelector(false)} className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-800">
+                                   Cancel
+                               </button>
+                           )}
+                           <button 
+                                onClick={handleSaveLeagues}
+                                disabled={selectedLeagueKeys.length === 0}
+                                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-2 rounded-lg font-bold transition-colors flex items-center gap-2"
+                           >
+                               <Save className="w-4 h-4" />
+                               Visualize Selected
+                           </button>
+                       </div>
+                  </div>
+              </div>
+          </div>
+      );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-slate-500 gap-4">
         <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
         <p className="animate-pulse font-medium">Syncing with Yahoo Fantasy API...</p>
-        <p className="text-xs text-slate-600">Downloading Standings, Drafts, and Transactions...</p>
       </div>
     );
   }
 
-  // --- Error Screen ---
   if (error) {
     return (
        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -398,7 +447,7 @@ const App: React.FC = () => {
           <h3 className="text-xl font-bold text-white mb-2">Connection Interrupted</h3>
           <p className="text-slate-400 mb-8">{error}</p>
           <button 
-            onClick={() => { setToken(''); setError(null); }}
+            onClick={() => { setToken(''); setError(null); setShowLeagueSelector(false); }}
             className="w-full bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-xl transition-colors font-medium"
           >
             Return to Login
@@ -424,11 +473,8 @@ const App: React.FC = () => {
     </button>
   );
 
-  // --- Main Dashboard ---
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 selection:bg-indigo-500/30">
-      
-      {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 bg-slate-900/90 backdrop-blur-md border-b border-slate-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -436,7 +482,7 @@ const App: React.FC = () => {
               <div className="bg-indigo-600 p-1.5 rounded-lg">
                 <Trophy className="w-5 h-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white tracking-tight hidden sm:block">NooKs Fantasy League Legacy</span>
+              <span className="text-lg font-bold text-white tracking-tight hidden sm:block">NooKs Legacy</span>
             </div>
             
             <div className="flex items-center gap-1 overflow-x-auto no-scrollbar px-4">
@@ -448,7 +494,10 @@ const App: React.FC = () => {
                <NavButton v={ViewState.HISTORY} icon={History} label="Stats" />
             </div>
             
-            <div className="flex items-center shrink-0">
+            <div className="flex items-center shrink-0 gap-2">
+              <button onClick={openSettings} className="text-slate-400 hover:text-white p-2 rounded-full hover:bg-slate-800 transition-colors" title="Change League">
+                  <ListFilter className="w-5 h-5" />
+              </button>
               <button onClick={() => { localStorage.removeItem('yahoo_token'); setToken(''); setData(null); }} className="text-xs font-medium text-slate-500 hover:text-red-400 transition-colors px-3 py-2">
                 Sign Out
               </button>
@@ -457,22 +506,16 @@ const App: React.FC = () => {
         </div>
       </nav>
 
-      {/* Main Content */}
       <main className="pt-24 pb-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
-        
-        {/* View Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* Left Main Column */}
           <div className="lg:col-span-2 space-y-8">
             {view === ViewState.DASHBOARD && (
               <div className="space-y-8 animate-in fade-in duration-500">
-                 
                  <div className="relative overflow-hidden bg-gradient-to-r from-indigo-900 to-slate-900 border border-indigo-500/20 rounded-2xl p-8 text-center">
                     <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-10"></div>
                     <h2 className="text-3xl font-bold text-white mb-4 relative z-10">The Legacy Archives</h2>
                     <p className="text-indigo-200/80 max-w-xl mx-auto mb-8 relative z-10 leading-relaxed">
-                      Tracking over a decade of fantasy dominance, heartbreak, and waiver wire wonders. 
+                      Tracking {data.seasons.length} seasons of fantasy dominance.
                     </p>
                     <div className="flex flex-col sm:flex-row justify-center gap-4 relative z-10">
                       <button 
@@ -489,35 +532,18 @@ const App: React.FC = () => {
                       </button>
                     </div>
                  </div>
-
                  <LeagueRecords data={data} />
-                 
                  <StandingsTable data={data} />
               </div>
             )}
 
-            {view === ViewState.STANDINGS && (
-              <div className="animate-in fade-in duration-300">
-                <StandingsTable data={data} />
-              </div>
-            )}
-
-            {view === ViewState.VERSUS && (
-              <Versus data={data} token={token} />
-            )}
-
-            {view === ViewState.DRAFT && (
-              <DraftHistory data={data} token={token} />
-            )}
-
-            {view === ViewState.TRANSACTIONS && (
-              <TransactionLog data={data} />
-            )}
-
+            {view === ViewState.STANDINGS && <div className="animate-in fade-in duration-300"><StandingsTable data={data} /></div>}
+            {view === ViewState.VERSUS && <Versus data={data} token={token} />}
+            {view === ViewState.DRAFT && <DraftHistory data={data} token={token} />}
+            {view === ViewState.TRANSACTIONS && <TransactionLog data={data} />}
             {view === ViewState.HISTORY && (
               <div className="space-y-8 animate-in fade-in duration-300">
                 <HistoryChart data={data} />
-                
                 <h3 className="text-xl font-bold text-white px-1">Season History</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {data.seasons.slice().reverse().map(season => {
@@ -544,9 +570,7 @@ const App: React.FC = () => {
             )}
           </div>
 
-          {/* Right Sidebar Column */}
           <div className="space-y-8">
-            {/* Status Cards */}
             <div className="grid grid-cols-1 gap-4">
                 <div className="bg-slate-800 p-5 rounded-2xl border border-slate-700 relative overflow-hidden group hover:border-yellow-500/30 transition-colors">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-500/5 rounded-full -mr-10 -mt-10 transition-transform group-hover:scale-110" />
@@ -597,7 +621,7 @@ const App: React.FC = () => {
                   <div>
                     <p className="text-slate-200 text-sm font-medium">Archive Depth</p>
                     <span className="text-xs text-slate-500">
-                       {data.seasons.length} seasons • {data.seasons.reduce((acc, s) => acc + (s.draft?.length || 0), 0)} picks • {data.seasons.reduce((acc, s) => acc + (s.transactions?.length || 0), 0)} transactions
+                       {data.seasons.length} seasons • {data.seasons.reduce((acc, s) => acc + (s.draft?.length || 0), 0)} picks
                     </span>
                   </div>
                 </div>

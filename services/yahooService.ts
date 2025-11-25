@@ -1,49 +1,114 @@
-import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction } from '../types';
-
-const LEAGUE_KEYS = [
-  { key: '257.l.492507', year: 2011 },
-  { key: '273.l.320863', year: 2012 },
-  { key: '314.l.593746', year: 2013 },
-  { key: '331.l.632785', year: 2014 },
-  { key: '348.l.410974', year: 2015 },
-  { key: '359.l.394988', year: 2016 },
-  { key: '371.l.283892', year: 2017 },
-  { key: '380.l.915216', year: 2018 },
-  { key: '390.l.192337', year: 2019 },
-  { key: '399.l.626629', year: 2020 },
-  { key: '406.l.699932', year: 2021 },
-  { key: '414.l.776784', year: 2022 },
-  { key: '423.l.520268', year: 2023 },
-  { key: '449.l.155143', year: 2024 },
-  { key: '461.l.51376', year: 2025 },
-];
+import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction, LeagueSummary } from '../types';
 
 const PROXY_URL = 'https://corsproxy.io/?';
 const BASE_URL = 'https://fantasysports.yahooapis.com/fantasy/v2';
 
-export const fetchYahooData = async (accessToken: string): Promise<LeagueData> => {
-  // Yahoo API allows max 25 keys per request.
-  const keysString = LEAGUE_KEYS.map(k => k.key).join(',');
-  
-  // Request standings, draft results, and transactions (limited count to avoid payload explosion)
-  // We use the 'out' parameter to fetch multiple resources for the leagues collection
-  const targetUrl = `${BASE_URL}/leagues;league_keys=${keysString};out=standings,draftresults,transactions?format=json`;
-  
-  const response = await fetch(`${PROXY_URL}${encodeURIComponent(targetUrl)}`, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-    },
+// Game IDs for NFL Fantasy Football from 2011 to 2025
+const NFL_GAME_KEYS = [
+  461, // 2025 (Future/Current)
+  449, // 2024
+  423, // 2023
+  414, // 2022
+  406, // 2021
+  399, // 2020
+  390, // 2019
+  380, // 2018
+  371, // 2017
+  359, // 2016
+  348, // 2015
+  331, // 2014
+  314, // 2013
+  273, // 2012
+  257  // 2011
+];
+
+export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSummary[]> => {
+  // Fetch leagues across all known NFL game keys to build a history
+  // Yahoo allows comma-separated game keys
+  const keysString = NFL_GAME_KEYS.join(',');
+  const url = `${BASE_URL}/users;use_login=1/games;game_keys=${keysString}/leagues?format=json`;
+
+  const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
+    headers: { 'Authorization': `Bearer ${accessToken}` }
   });
 
-  if (!response.ok) {
-    if (response.status === 401) {
-        throw new Error("Unauthorized");
-    }
-    throw new Error(`Yahoo API Error: ${response.status} ${response.statusText}`);
-  }
+  if (!response.ok) throw new Error("Failed to fetch user leagues");
 
   const json = await response.json();
-  return transformYahooData(json);
+  const leagues: LeagueSummary[] = [];
+  
+  const games = json?.fantasy_content?.users?.[0]?.user?.[1]?.games;
+  if (!games) return [];
+
+  // Iterate over games (years)
+  const gameCount = games.count;
+  for (let i = 0; i < gameCount; i++) {
+    const gameWrapper = games[i + ""]?.game;
+    if (!gameWrapper) continue;
+
+    const gameMeta = gameWrapper[0];
+    const seasonYear = parseInt(gameMeta.season);
+    
+    const leaguesNode = gameWrapper[1]?.leagues;
+    if (!leaguesNode) continue;
+
+    const leagueCount = leaguesNode.count;
+    for (let j = 0; j < leagueCount; j++) {
+       const leagueObj = leaguesNode[j + ""]?.league;
+       if (!leagueObj) continue;
+       
+       const meta = leagueObj[0];
+       leagues.push({
+         key: meta.league_key,
+         name: meta.name,
+         year: seasonYear,
+         logo: meta.logo_url
+       });
+    }
+  }
+
+  // Sort by year desc
+  return leagues.sort((a, b) => b.year - a.year);
+};
+
+export const fetchYahooData = async (accessToken: string, leagueKeys: string[]): Promise<LeagueData> => {
+  if (!leagueKeys || leagueKeys.length === 0) throw new Error("No leagues selected.");
+
+  // Yahoo API allows max 25 keys per request. We must batch.
+  const BATCH_SIZE = 25;
+  const chunks = [];
+  for (let i = 0; i < leagueKeys.length; i += BATCH_SIZE) {
+    chunks.push(leagueKeys.slice(i, i + BATCH_SIZE));
+  }
+
+  const allSeasons: Season[] = [];
+  const allManagersMap = new Map<string, any>();
+
+  // Process batches sequentially (or Promise.all if we want speed, but Yahoo is sensitive to burst)
+  // We'll use sequential to map managers correctly across batches
+  for (const chunk of chunks) {
+     const keysString = chunk.join(',');
+     const targetUrl = `${BASE_URL}/leagues;league_keys=${keysString};out=standings,draftresults,transactions?format=json`;
+     
+     const response = await fetch(`${PROXY_URL}${encodeURIComponent(targetUrl)}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+     });
+
+     if (!response.ok) {
+        if (response.status === 401) throw new Error("Unauthorized");
+        console.warn(`Batch failed for keys: ${keysString}`);
+        continue;
+     }
+
+     const json = await response.json();
+     const { managers, seasons } = transformYahooData(json, allManagersMap); // Pass map to accumulate
+     allSeasons.push(...seasons);
+  }
+
+  allSeasons.sort((a, b) => a.year - b.year);
+  const managers = Array.from(allManagersMap.values()).map(({id, name, avatar}) => ({id, name, avatar}));
+
+  return { managers, seasons: allSeasons };
 };
 
 export const fetchPlayerDetails = async (accessToken: string, playerKeys: string[]) => {
@@ -205,15 +270,13 @@ const parseMatchups = (json: any) => {
   return results;
 };
 
-const transformYahooData = (data: any): LeagueData => {
-  const managersMap = new Map<string, any>();
-  // Map team_key -> manager_id (guid) to link drafts/transactions later
+// Modified to accept an existing map for batch accumulation
+const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()): { seasons: Season[], managers: any } => {
   const teamKeyToManagerId = new Map<string, string>();
-
   const seasons: Season[] = [];
 
   const leaguesObj = data?.fantasy_content?.leagues;
-  if (!leaguesObj) throw new Error("Invalid Data Format");
+  if (!leaguesObj) return { seasons: [], managers: managersMap }; // Graceful exit if chunk is empty
 
   const count = leaguesObj.count;
   
@@ -224,8 +287,7 @@ const transformYahooData = (data: any): LeagueData => {
     // 1. Metadata
     const metadata = leagueData[0];
     const leagueKey = metadata.league_key;
-    const yearMapping = LEAGUE_KEYS.find(k => k.key === leagueKey);
-    const year = yearMapping ? yearMapping.year : parseInt(metadata.season);
+    const year = parseInt(metadata.season);
 
     // 2. Standings (index 1 usually, but order can vary with 'out' param, so we search)
     const standingsNode = leagueData.find((n: any) => n.standings);
@@ -396,8 +458,5 @@ const transformYahooData = (data: any): LeagueData => {
     });
   }
 
-  seasons.sort((a, b) => a.year - b.year);
-  const managers = Array.from(managersMap.values()).map(({id, name, avatar}) => ({id, name, avatar}));
-
-  return { managers, seasons };
+  return { seasons, managers: managersMap };
 };

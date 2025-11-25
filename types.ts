@@ -56,6 +56,13 @@ export interface LeagueData {
   seasons: Season[];
 }
 
+export interface LeagueSummary {
+  key: string;
+  name: string;
+  year: number;
+  logo?: string;
+}
+
 export enum ViewState {
   DASHBOARD = 'DASHBOARD',
   STANDINGS = 'STANDINGS',
