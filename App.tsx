@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { LayoutDashboard, Table2, History, Trophy, Crown, Loader2, AlertCircle, Settings, CheckCircle2, Gavel, UserPlus, Swords, Copy, Key, LogIn, ExternalLink } from 'lucide-react';
 import { fetchYahooData } from './services/yahooService';
 import { LeagueData, ViewState } from './types';
 import { HistoryChart } from './components/HistoryChart';
@@ -9,20 +9,6 @@ import { LeagueRecords } from './components/LeagueRecords';
 import { Versus } from './components/Versus';
 import { DraftHistory } from './components/DraftHistory';
 import { TransactionLog } from './components/TransactionLog';
-
-// --- PKCE UTILITIES ---
-const generateCodeVerifier = () => {
-  const array = new Uint8Array(32);
-  window.crypto.getRandomValues(array);
-  return btoa(String.fromCharCode(...array)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-
-const generateCodeChallenge = async (verifier: string) => {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const digest = await window.crypto.subtle.digest('SHA-256', data);
-  return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
 
 // --- CONFIGURATION ---
 const App: React.FC = () => {
@@ -37,20 +23,23 @@ const App: React.FC = () => {
     return localStorage.getItem('yahoo_client_id') || process.env.YAHOO_CLIENT_ID || '';
   });
   
+  // Default Redirect URI is the current page URL without hash/query
   const [redirectUri, setRedirectUri] = useState<string>(() => {
-    // Default to current location without hash, and strip trailing slash for consistency
-    const defaultUri = window.location.href.split('#')[0].split('?')[0].replace(/\/$/, '');
-    return localStorage.getItem('yahoo_redirect_uri') || defaultUri;
+    const saved = localStorage.getItem('yahoo_redirect_uri');
+    // Default to current origin + pathname (e.g. https://myapp.com/ or https://myapp.com/app)
+    // We strip trailing slash for consistency unless it's just root '/'
+    let current = window.location.origin + window.location.pathname;
+    if (current.endsWith('/') && current.length > 1) {
+       current = current.slice(0, -1);
+    }
+    return saved || current;
   });
 
   // UI State
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('Loading...');
   const [error, setError] = useState<string | null>(null);
-  const [showManualInput, setShowManualInput] = useState(false);
-
-  // Refs for Strict Mode / Double-Invoke prevention
-  const authProcessedRef = useRef(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Data Loading Function
   const loadData = async (accessToken: string) => {
@@ -64,8 +53,8 @@ const App: React.FC = () => {
       localStorage.setItem('yahoo_token', accessToken);
     } catch (err: any) {
       console.error(err);
-      if (err.message === 'Unauthorized') {
-        setError('Token expired or invalid. Please reconnect.');
+      if (err.message === 'Unauthorized' || err.message.includes('401')) {
+        setError('Session expired. Please reconnect.');
         localStorage.removeItem('yahoo_token');
         setToken('');
       } else {
@@ -76,145 +65,46 @@ const App: React.FC = () => {
     }
   };
 
-  // Auth Effect: Handle Redirects, Token Exchange, and Cross-Tab Sync
+  // Initial Load / Auth Check
   useEffect(() => {
-    // 1. Cross-Tab / Popup Synchronization
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'yahoo_token' && e.newValue) {
-        console.log("Detected token in another tab. Syncing...");
-        setToken(e.newValue);
-        loadData(e.newValue);
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-
-    // 2. Auth Logic
-    const handleAuth = async () => {
-      // Check for Authorization Code (PKCE Flow)
-      const urlParams = new URLSearchParams(window.location.search);
-      const code = urlParams.get('code');
-      
-      // Prevent double-processing in Strict Mode
-      if (code && !authProcessedRef.current) {
-        authProcessedRef.current = true;
-        
-        const verifier = localStorage.getItem('yahoo_code_verifier');
-        if (verifier && clientId) {
-          setLoading(true);
-          setLoadingMessage('Authenticating with Yahoo...');
-          
-          // Clean URL immediately to prevent code reuse attempts on refresh
-          window.history.replaceState(null, '', window.location.pathname);
-          
-          try {
-            const body = new URLSearchParams({
-              client_id: clientId,
-              redirect_uri: redirectUri,
-              code: code,
-              grant_type: 'authorization_code',
-              code_verifier: verifier
-            });
-            
-            // Exchange code for token via Proxy to avoid CORS
-            const tokenUrl = 'https://api.login.yahoo.com/oauth2/get_token';
-            const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(tokenUrl)}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: body.toString()
-            });
-            
-            const json = await res.json();
-            if (json.access_token) {
-              const newToken = json.access_token;
-              
-              setToken(newToken);
-              localStorage.setItem('yahoo_token', newToken);
-              localStorage.removeItem('yahoo_code_verifier'); // Cleanup
-
-              // Handle Popup Case: If opened in popup, update opener and close self
-              if (window.opener) {
-                try {
-                   // Try writing to opener's storage (same origin) or postMessage
-                   window.opener.postMessage({ type: 'YAHOO_AUTH_SUCCESS', token: newToken }, window.location.origin);
-                   window.close();
-                   return;
-                } catch (e) {
-                   console.warn("Could not communicate with opener window", e);
-                }
-              }
-
-              loadData(newToken);
-            } else {
-              throw new Error(json.error_description || 'Failed to exchange token. Check Client ID and Redirect URI.');
-            }
-          } catch (err: any) {
-             console.error(err);
-             setError(err.message || "Token exchange failed");
-             setLoading(false);
-          }
-        } else {
-           console.warn("Found code but no verifier or client ID. Session may have expired.");
-        }
-        return; // Stop processing other checks if code was present
-      }
-
-      // 3. Check for Implicit Flow (Legacy/Manual)
-      const hash = window.location.hash;
-      if (hash && hash.includes('access_token')) {
-        const params = new URLSearchParams(hash.substring(1)); // remove #
+    // 1. Handle OAuth Redirect (Implicit Flow Return)
+    // Yahoo returns the token in the URL hash: #access_token=...
+    const hash = window.location.hash;
+    if (hash && hash.includes('access_token')) {
+      try {
+        const params = new URLSearchParams(hash.substring(1)); // remove the leading '#'
         const accessToken = params.get('access_token');
+        
         if (accessToken) {
-          setToken(accessToken);
-          localStorage.setItem('yahoo_token', accessToken);
+          console.log("Token detected in URL, logging in...");
+          // Clean the URL so the user doesn't see the ugly token
           window.history.replaceState(null, '', window.location.pathname);
+          
+          setToken(accessToken);
           loadData(accessToken);
           return;
         }
-      } 
-      
-      // 4. Check Local Storage (Persisted Session)
-      if (token && !data && !loading && !error && !code) {
-        loadData(token);
+      } catch (e) {
+        console.error("Error parsing auth hash", e);
       }
-    };
+    }
 
-    handleAuth();
+    // 2. Handle OAuth Errors (e.g. user denied access)
+    // Yahoo might return errors in search query: ?error=access_denied
+    const search = window.location.search;
+    if (search && search.includes('error')) {
+         const params = new URLSearchParams(search);
+         const errorMsg = params.get('error_description') || params.get('error') || 'Authentication failed';
+         setError(`Yahoo Connection Failed: ${errorMsg}`);
+         // Clean URL
+         window.history.replaceState(null, '', window.location.pathname);
+    }
 
-    // Listener for popup messages
-    const handleMessage = (event: MessageEvent) => {
-       if (event.origin !== window.location.origin) return;
-       if (event.data?.type === 'YAHOO_AUTH_SUCCESS' && event.data?.token) {
-          console.log("Received auth token from popup");
-          setToken(event.data.token);
-          localStorage.setItem('yahoo_token', event.data.token);
-          loadData(event.data.token);
-       }
-    };
-    window.addEventListener('message', handleMessage);
-
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('message', handleMessage);
-    };
-  }, []); // Run once on mount
-
-  // Initiate Login with PKCE
-  const handleLogin = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (!clientId) return;
-
-    // Generate PKCE Verifier & Challenge
-    const verifier = generateCodeVerifier();
-    localStorage.setItem('yahoo_code_verifier', verifier);
-    const challenge = await generateCodeChallenge(verifier);
-
-    const scope = 'fspt-r'; // Fantasy Sports Read
-    
-    // Construct Auth URL (Response Type = CODE for PKCE)
-    const authUrl = `https://api.login.yahoo.com/oauth2/request_auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&code_challenge=${challenge}&code_challenge_method=S256`;
-    
-    window.location.href = authUrl;
-  };
+    // 3. Check for existing persisted session
+    if (token && !data && !loading && !error) {
+      loadData(token);
+    }
+  }, []);
 
   // Configuration Handlers
   const handleClientIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -229,20 +119,28 @@ const App: React.FC = () => {
     localStorage.setItem('yahoo_redirect_uri', newVal);
   };
 
-  const resetConfig = () => {
-    localStorage.removeItem('yahoo_client_id');
-    localStorage.removeItem('yahoo_redirect_uri');
-    setClientId('');
-    setRedirectUri(window.location.href.split('#')[0].split('?')[0].replace(/\/$/, ''));
-    setShowManualInput(true);
+  // MAIN LOGIN ACTION
+  const handleLogin = () => {
+    if (!clientId) {
+      setError("Client ID is required.");
+      setShowSettings(true);
+      return;
+    }
+    
+    // Ensure persistence before redirect
+    localStorage.setItem('yahoo_client_id', clientId);
+    localStorage.setItem('yahoo_redirect_uri', redirectUri);
+
+    // Construct OAuth URL
+    // response_type=token -> Implicit Flow (Simple, client-side only)
+    const scope = 'fspt-r'; 
+    const authUrl = `https://api.login.yahoo.com/oauth2/request_auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${scope}`;
+    
+    // Redirect User
+    window.location.href = authUrl;
   };
 
-  const handleManualTokenSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (token) loadData(token);
-  };
-
-  // --- Login / Auth Screen ---
+  // --- Login Screen ---
   if (!token || (!data && !loading && !error)) {
     return (
       <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center relative overflow-hidden">
@@ -251,9 +149,9 @@ const App: React.FC = () => {
         <div className="absolute inset-0 bg-gradient-to-b from-slate-900/80 via-slate-900/90 to-slate-900 pointer-events-none" />
         
         {/* Content Container */}
-        <div className="relative z-10 max-w-4xl w-full px-6 flex flex-col items-center text-center">
+        <div className="relative z-10 max-w-md w-full px-6 flex flex-col items-center text-center">
           
-          {/* Logo / Icon */}
+          {/* Logo */}
           <div className="mb-8 relative group">
             <div className="absolute inset-0 bg-indigo-500 blur-[60px] opacity-40 rounded-full group-hover:opacity-60 transition-opacity duration-500" />
             <div className="relative bg-slate-800/50 backdrop-blur-xl border border-slate-700 p-6 rounded-3xl shadow-2xl">
@@ -261,165 +159,84 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Headlines */}
-          <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight mb-6 drop-shadow-xl">
-            NooKs Fantasy League <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Legacy</span>
+          <h1 className="text-3xl font-bold text-white tracking-tight mb-2">
+            League Legacy
           </h1>
-          <p className="text-xl text-slate-300 max-w-2xl mx-auto mb-12 leading-relaxed">
-            The ultimate historical archive for your Yahoo Fantasy Football league. 
-            Visualize dynasties, track rivalries, and uncover the stats that matter.
+          <p className="text-slate-400 mb-8 leading-relaxed text-sm">
+            Visualize your fantasy football history.
           </p>
-
-          {/* Main Action */}
-          <div className="flex flex-col items-center gap-6 w-full max-w-sm">
-            {!clientId ? (
-              <div className="bg-orange-500/10 border border-orange-500/50 p-4 rounded-xl text-left w-full animate-in fade-in slide-in-from-top-2">
-                <div className="flex items-start gap-3">
-                  <Settings className="w-5 h-5 text-orange-400 shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="font-bold text-orange-400 text-sm">Setup Required</h4>
-                    <p className="text-xs text-orange-300/80 mt-1">
-                      Open <b>Advanced Configuration</b> below and enter your Yahoo Client ID to continue.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={handleLogin}
-                className="w-full group relative flex items-center justify-center gap-3 bg-white text-slate-900 hover:bg-indigo-50 py-4 px-8 rounded-2xl font-bold text-lg transition-all transform hover:scale-[1.02] shadow-[0_0_40px_-10px_rgba(99,102,241,0.5)] cursor-pointer decoration-0 focus:outline-none focus:ring-4 focus:ring-indigo-500/50"
-              >
-                <svg className="w-6 h-6 text-[#6001d2]" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm-1-7.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/> 
-                </svg>
-                Connect with Yahoo
-                <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
-              </button>
-            )}
-            
-            <div className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold opacity-60">
-               (Securely connects via Yahoo OAuth)
-            </div>
-
-            {/* Manual Override Toggle */}
-            <button 
-              onClick={() => setShowManualInput(!showManualInput)}
-              className="text-slate-500 text-sm hover:text-indigo-400 transition-colors flex items-center gap-2 mt-2"
-            >
-              <Settings className="w-3 h-3" />
-              {showManualInput ? 'Hide Advanced' : 'Advanced Configuration'}
-            </button>
-
-            {/* Manual Input Form */}
-            {showManualInput && (
-              <div className="w-full space-y-6 animate-in fade-in slide-in-from-top-2 bg-slate-800/80 p-4 rounded-xl border border-slate-700 backdrop-blur-sm text-left">
-                
-                <div className="flex justify-between items-center mb-2">
-                   <h3 className="text-xs font-bold text-white uppercase tracking-wider">Configuration</h3>
-                   <button onClick={resetConfig} className="text-[10px] text-red-400 hover:text-red-300 flex items-center gap-1">
-                      <RotateCcw className="w-3 h-3" /> Reset
+          
+          <div className="w-full bg-slate-800/80 backdrop-blur-md border border-slate-700 rounded-2xl p-6 shadow-2xl space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
+             
+             {/* Client ID Input */}
+             <div className="text-left space-y-1.5">
+                <label className="text-xs font-bold text-slate-400 uppercase flex justify-between">
+                   Yahoo Client ID
+                   <button onClick={() => setShowSettings(!showSettings)} className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                      <Settings className="w-3 h-3" /> Config
                    </button>
-                </div>
+                </label>
+                <input
+                  type="text"
+                  value={clientId}
+                  onChange={handleClientIdChange}
+                  placeholder="Paste Client ID here"
+                  className="block w-full bg-slate-900/50 border border-slate-600 rounded-lg py-3 px-4 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder-slate-600"
+                />
+             </div>
 
-                {/* Client ID Configuration */}
-                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Yahoo Client ID</label>
-                  <div className="relative">
+             {/* Redirect URI (Collapsible Settings) */}
+             {showSettings && (
+               <div className="text-left space-y-1.5 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-2">
+                     Redirect URI <span className="text-emerald-500 normal-case font-normal">(Must match Yahoo App Settings)</span>
+                  </label>
+                  <div className="flex gap-2">
                     <input
                       type="text"
-                      value={clientId}
-                      onChange={handleClientIdChange}
-                      className="block w-full bg-black/30 border border-slate-600 rounded-lg py-2 px-3 text-xs text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-transparent transition-all"
-                      placeholder="Paste Client ID from Yahoo Developer Console"
+                      value={redirectUri}
+                      onChange={handleRedirectUriChange}
+                      className="block w-full bg-transparent border-none p-0 text-xs text-slate-300 font-mono focus:ring-0"
                     />
-                    {clientId && <CheckCircle2 className="absolute right-3 top-2 w-4 h-4 text-emerald-500" />}
-                  </div>
-                  <p className="text-[10px] text-slate-500 leading-snug">
-                     Required. Found in your Yahoo Developer App details.
-                  </p>
-                </div>
-
-                {/* Redirect URI Configuration */}
-                <div className="space-y-2 pt-2 border-t border-slate-700/50">
-                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Redirect URI (Match Exact)</label>
-                   <div className="relative">
-                      <input
-                        type="text"
-                        value={redirectUri}
-                        onChange={handleRedirectUriChange}
-                        className="block w-full bg-black/30 border border-slate-600 rounded-lg py-2 px-3 text-xs text-emerald-400 font-mono placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-transparent transition-all"
-                      />
-                      <button 
-                        onClick={() => navigator.clipboard.writeText(redirectUri)}
-                        className="absolute right-2 top-1.5 text-slate-500 hover:text-white bg-slate-800 p-1 rounded"
-                        title="Copy to clipboard"
-                      >
-                         <Copy className="w-3 h-3" />
-                      </button>
-                   </div>
-                   <p className="text-[10px] text-slate-500 leading-snug">
-                     <b>Crucial:</b> Copy this exact URL and paste it into your <a href="https://developer.yahoo.com/apps/" target="_blank" className="underline hover:text-indigo-400">Yahoo App Settings</a> under "Redirect URI(s)". Mismatches cause the "Uh oh" error.
-                   </p>
-                </div>
-
-                <div className="border-t border-slate-700/50 pt-4">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Manual Token Entry (Fallback)</label>
-                  
-                  {/* Fallback Link */}
-                  <div className="mb-4 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-lg">
-                    <p className="text-[10px] text-indigo-300 mb-2 leading-relaxed">
-                        If the direct connection is blocked, use this tool to generate a token, then paste it below:
-                    </p>
-                    <a 
-                        href="https://lemon-dune-0cd4b231e.azurestaticapps.net/" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 px-3 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors w-full"
-                    >
-                        <ExternalLink className="w-3 h-3" />
-                        Open Token Generator
-                    </a>
-                  </div>
-
-                  <form onSubmit={handleManualTokenSubmit} className="space-y-3">
-                    <div className="relative group">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Key className="h-4 w-4 text-slate-500" />
-                      </div>
-                      <input
-                        type="password"
-                        value={token}
-                        onChange={(e) => setToken(e.target.value)}
-                        className="block w-full pl-10 bg-slate-900 border border-slate-600 rounded-lg py-2 text-xs text-white placeholder-slate-500 focus:ring-1 focus:ring-indigo-500 focus:border-transparent transition-all"
-                        placeholder="Paste Access Token"
-                      />
-                    </div>
                     <button 
-                      type="submit"
-                      className="w-full bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+                      onClick={() => navigator.clipboard.writeText(redirectUri)}
+                      className="text-slate-500 hover:text-white"
+                      title="Copy to clipboard"
                     >
-                      Load Data
+                      <Copy className="w-3 h-3" />
                     </button>
-                  </form>
-                </div>
-              </div>
-            )}
+                  </div>
+               </div>
+             )}
+
+             {/* Connect Button */}
+             <button
+               onClick={handleLogin}
+               className="w-full group relative flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3.5 px-4 rounded-xl font-bold text-base transition-all transform hover:scale-[1.02] shadow-lg shadow-indigo-500/25"
+             >
+               <LogIn className="w-5 h-5" />
+               Connect with Yahoo
+             </button>
+
+             {/* Error Message */}
+             {error && (
+               <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-start gap-2 text-left">
+                  <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-400">{error}</p>
+               </div>
+             )}
           </div>
 
-          {/* Footer Stats */}
-          <div className="mt-16 grid grid-cols-3 gap-8 text-center border-t border-slate-800 pt-8">
-             <div>
-                <div className="text-2xl font-bold text-white">Instant</div>
-                <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Sync</div>
-             </div>
-             <div>
-                <div className="text-2xl font-bold text-white">10+</div>
-                <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Years Supported</div>
-             </div>
-             <div>
-                <div className="text-2xl font-bold text-white">AI</div>
-                <div className="text-xs text-slate-500 uppercase tracking-wider mt-1">Powered Insights</div>
-             </div>
+          {/* Helper Link */}
+          <div className="mt-8 text-center">
+             <a 
+               href="https://developer.yahoo.com/apps/create/" 
+               target="_blank" 
+               rel="noopener noreferrer"
+               className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-indigo-400 transition-colors"
+             >
+                Need a Client ID? Create App on Yahoo <ExternalLink className="w-3 h-3" />
+             </a>
           </div>
         </div>
       </div>
@@ -430,34 +247,19 @@ const App: React.FC = () => {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-slate-500 gap-4">
-        <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
-        <p className="animate-pulse font-medium text-white">{loadingMessage}</p>
-        <p className="text-xs text-slate-600">Please wait while we crunch the numbers...</p>
-      </div>
-    );
-  }
-
-  // --- Error Screen ---
-  if (error) {
-    return (
-       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-        <div className="bg-slate-800 p-8 rounded-2xl border border-red-900/50 max-w-md w-full text-center shadow-2xl">
-          <div className="bg-red-500/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-             <AlertCircle className="w-10 h-10 text-red-500" />
-          </div>
-          <h3 className="text-xl font-bold text-white mb-2">Connection Interrupted</h3>
-          <p className="text-slate-400 mb-8">{error}</p>
-          <button 
-            onClick={() => { setToken(''); setError(null); }}
-            className="w-full bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-xl transition-colors font-medium"
-          >
-            Return to Login
-          </button>
+        <div className="relative">
+           <div className="absolute inset-0 bg-indigo-500 blur-xl opacity-20 rounded-full animate-pulse" />
+           <Loader2 className="w-12 h-12 text-indigo-500 animate-spin relative z-10" />
+        </div>
+        <div className="text-center space-y-1">
+          <p className="font-medium text-white text-lg">{loadingMessage}</p>
+          <p className="text-xs text-slate-600">This may take a few moments...</p>
         </div>
       </div>
     );
   }
 
+  // --- Main App Logic (If Data Loaded) ---
   if (!data) return null;
 
   const currentSeason = data.seasons[data.seasons.length - 1];
@@ -474,7 +276,6 @@ const App: React.FC = () => {
     </button>
   );
 
-  // --- Main Dashboard ---
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 selection:bg-indigo-500/30">
       
@@ -486,7 +287,7 @@ const App: React.FC = () => {
               <div className="bg-indigo-600 p-1.5 rounded-lg">
                 <Trophy className="w-5 h-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white tracking-tight hidden sm:block">NooKs Fantasy League Legacy</span>
+              <span className="text-lg font-bold text-white tracking-tight hidden sm:block">NooKs League Legacy</span>
             </div>
             
             <div className="flex items-center gap-1 overflow-x-auto no-scrollbar px-4">
@@ -499,7 +300,10 @@ const App: React.FC = () => {
             </div>
             
             <div className="flex items-center shrink-0">
-              <button onClick={() => { localStorage.removeItem('yahoo_token'); setToken(''); setData(null); }} className="text-xs font-medium text-slate-500 hover:text-red-400 transition-colors px-3 py-2">
+              <button 
+                onClick={() => { localStorage.removeItem('yahoo_token'); setToken(''); setData(null); }} 
+                className="text-xs font-medium text-slate-500 hover:text-red-400 transition-colors px-3 py-2"
+              >
                 Sign Out
               </button>
             </div>
