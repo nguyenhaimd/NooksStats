@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { LeagueData } from '../types';
-import { Flame, Snowflake, TrendingUp, TrendingDown, Target, Scale, Zap, ShieldAlert } from 'lucide-react';
+import { Flame, Snowflake, TrendingUp, TrendingDown, Target, Zap } from 'lucide-react';
 
 interface LeagueRecordsProps {
   data: LeagueData;
@@ -12,6 +12,7 @@ export const LeagueRecords: React.FC<LeagueRecordsProps> = ({ data }) => {
     let minSeasonPF = { mgr: '', val: 99999, year: 0, avatar: '' };
     let bestAvgRank = { mgr: '', val: 99, avatar: '' };
     let mostSackos = { mgr: '', val: 0, avatar: '' };
+    let maxSingleGame = { mgr: '', val: 0, year: 0, week: 0, avatar: '' };
     
     const mgrStats: Record<string, { ranks: number[], sackos: number }> = {};
     
@@ -41,6 +42,20 @@ export const LeagueRecords: React.FC<LeagueRecordsProps> = ({ data }) => {
 
         mgrStats[entry.managerId].ranks.push(entry.stats.rank);
       });
+
+      // Single Game High (if games exist)
+      if (season.games) {
+         season.games.forEach(g => {
+            if (g.teamA.points > maxSingleGame.val) {
+                const m = data.managers.find(x => x.id === g.teamA.managerId);
+                if (m) maxSingleGame = { mgr: m.name, val: g.teamA.points, year: season.year, week: g.week, avatar: m.avatar };
+            }
+            if (g.teamB.points > maxSingleGame.val) {
+                const m = data.managers.find(x => x.id === g.teamB.managerId);
+                if (m) maxSingleGame = { mgr: m.name, val: g.teamB.points, year: season.year, week: g.week, avatar: m.avatar };
+            }
+         });
+      }
     });
 
     // Find Best Avg Rank
@@ -58,18 +73,18 @@ export const LeagueRecords: React.FC<LeagueRecordsProps> = ({ data }) => {
       }
     });
 
-    return { maxSeasonPF, minSeasonPF, bestAvgRank, mostSackos };
+    return { maxSeasonPF, minSeasonPF, bestAvgRank, mostSackos, maxSingleGame };
   }, [data]);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
       {/* High Score Card */}
       <div className="bg-slate-800/50 rounded-xl p-4 border border-orange-500/20 hover:border-orange-500/50 transition-colors group">
         <div className="flex justify-between items-start mb-2">
           <div className="p-2 bg-orange-500/10 rounded-lg group-hover:bg-orange-500/20 transition-colors">
             <Flame className="w-5 h-5 text-orange-500" />
           </div>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-orange-400/80">Highest Score</span>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-orange-400/80">Season High</span>
         </div>
         <div className="flex items-center gap-3">
            <img src={records.maxSeasonPF.avatar} alt="" className="w-10 h-10 rounded-full border border-slate-600" />
@@ -80,13 +95,32 @@ export const LeagueRecords: React.FC<LeagueRecordsProps> = ({ data }) => {
         </div>
       </div>
 
-      {/* Low Score Card */}
+      {/* Single Game High Card (New) */}
+      <div className="bg-slate-800/50 rounded-xl p-4 border border-yellow-500/20 hover:border-yellow-500/50 transition-colors group">
+        <div className="flex justify-between items-start mb-2">
+          <div className="p-2 bg-yellow-500/10 rounded-lg group-hover:bg-yellow-500/20 transition-colors">
+            <Zap className="w-5 h-5 text-yellow-500" />
+          </div>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-yellow-400/80">Game High</span>
+        </div>
+        <div className="flex items-center gap-3">
+           <img src={records.maxSingleGame.avatar || 'https://s.yimg.com/dh/ap/fantasy/img/profile/icon_user_default.png'} alt="" className="w-10 h-10 rounded-full border border-slate-600" />
+           <div>
+             <div className="text-xl font-bold text-white leading-none">{records.maxSingleGame.val > 0 ? records.maxSingleGame.val.toFixed(1) : '-'}</div>
+             <div className="text-xs text-slate-400 mt-1">
+                {records.maxSingleGame.val > 0 ? `${records.maxSingleGame.mgr} (${records.maxSingleGame.year})` : 'Sync for Data'}
+             </div>
+           </div>
+        </div>
+      </div>
+
+      {/* Low Score Card (Season) */}
       <div className="bg-slate-800/50 rounded-xl p-4 border border-cyan-500/20 hover:border-cyan-500/50 transition-colors group">
         <div className="flex justify-between items-start mb-2">
           <div className="p-2 bg-cyan-500/10 rounded-lg group-hover:bg-cyan-500/20 transition-colors">
             <Snowflake className="w-5 h-5 text-cyan-500" />
           </div>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400/80">Lowest Score</span>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400/80">Season Low</span>
         </div>
         <div className="flex items-center gap-3">
            <img src={records.minSeasonPF.avatar} alt="" className="w-10 h-10 rounded-full border border-slate-600" />

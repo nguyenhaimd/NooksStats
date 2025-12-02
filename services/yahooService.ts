@@ -1,4 +1,4 @@
-import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction, LeagueSummary } from '../types';
+import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction, LeagueSummary, Game } from '../types';
 
 const PROXY_URL = 'https://corsproxy.io/?';
 const BASE_URL = 'https://fantasysports.yahooapis.com/fantasy/v2';
@@ -107,6 +107,23 @@ export const fetchYahooData = async (accessToken: string, leagueKeys: string[]):
      const json = await response.json();
      // We await here because transformYahooData now fetches player names
      const { managers, seasons } = await transformYahooData(json, accessToken, allManagersMap); 
+     
+     // NEW: Fetch Schedule/Matchups for each season found
+     // This allows "offline" H2H viewing without needing a fresh token later
+     for (const season of seasons) {
+        try {
+            // Build a map of TeamKey -> ManagerID for this season
+            const teamMap = new Map<string, string>();
+            season.standings.forEach(s => teamMap.set(s.teamKey, s.managerId));
+
+            // Fetch games
+            season.games = await fetchSeasonGames(season.key, accessToken, teamMap);
+        } catch (e) {
+            console.warn(`Failed to fetch matchups for season ${season.year}`, e);
+            season.games = [];
+        }
+     }
+
      allSeasons.push(...seasons);
   }
 
@@ -114,6 +131,71 @@ export const fetchYahooData = async (accessToken: string, leagueKeys: string[]):
   const managers = Array.from(allManagersMap.values()).map(({id, name, avatar}) => ({id, name, avatar}));
 
   return { managers, seasons: allSeasons };
+};
+
+const fetchSeasonGames = async (leagueKey: string, accessToken: string, teamMap: Map<string, string>): Promise<Game[]> => {
+    // We request weeks 1-17 to cover standard fantasy seasons. 
+    const weeks = Array.from({length: 17}, (_, i) => i + 1).join(',');
+    const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${weeks}?format=json`;
+    
+    const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    
+    if (!response.ok) return [];
+
+    const json = await response.json();
+    const leagueNode = json?.fantasy_content?.leagues?.[0]?.league;
+    if (!leagueNode) return [];
+
+    const scoreboard = leagueNode.find((x:any) => x.scoreboard)?.scoreboard;
+    if (!scoreboard) return [];
+
+    // The scoreboard usually has a 'matchups' key at index 0
+    const matchupsNode = scoreboard[0]?.matchups;
+    if (!matchupsNode) return [];
+
+    const games: Game[] = [];
+    const count = matchupsNode.count;
+
+    for(let i=0; i<count; i++) {
+        const matchupWrapper = matchupsNode[i + ""]?.matchup;
+        if (!matchupWrapper) continue;
+
+        // Metadata is usually first object, but check explicitly for keys
+        const meta = matchupWrapper.find((x:any) => x.week) || matchupWrapper[0]; 
+        const teamsWrapper = matchupWrapper.find((x:any) => x.teams)?.teams;
+
+        if (teamsWrapper) {
+             const team0Data = teamsWrapper["0"]?.team;
+             const team1Data = teamsWrapper["1"]?.team;
+             
+             if (team0Data && team1Data) {
+                 const t0Key = team0Data[0]?.find((x:any) => x.team_key)?.team_key;
+                 const t0PtsObj = team0Data.find((x:any) => x.team_points)?.team_points;
+                 const t0Pts = parseFloat(t0PtsObj?.total || 0);
+
+                 const t1Key = team1Data[0]?.find((x:any) => x.team_key)?.team_key;
+                 const t1PtsObj = team1Data.find((x:any) => x.team_points)?.team_points;
+                 const t1Pts = parseFloat(t1PtsObj?.total || 0);
+                 
+                 const mgr0 = teamMap.get(t0Key);
+                 const mgr1 = teamMap.get(t1Key);
+
+                 if (mgr0 && mgr1) {
+                     games.push({
+                         week: parseInt(meta.week),
+                         isPlayoffs: meta.is_playoffs === '1',
+                         winnerTeamKey: meta.winner_team_key,
+                         isTie: meta.is_tied === '1',
+                         teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
+                         teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
+                     });
+                 }
+             }
+        }
+    }
+    return games;
 };
 
 export const fetchPlayerDetails = async (accessToken: string, playerKeys: string[]) => {
@@ -167,98 +249,11 @@ export const fetchPlayerDetails = async (accessToken: string, playerKeys: string
   return map;
 };
 
+// Kept for backward compatibility if needed, but primary sync now handles games
 export const fetchMatchups = async (accessToken: string, teamKeys: string[]) => {
-  const validKeys = teamKeys.filter(k => k && k.includes('.t.'));
-  
-  if (validKeys.length === 0) return [];
-  
-  const BATCH_SIZE = 5;
-  const chunks = [];
-  for(let i=0; i<validKeys.length; i+=BATCH_SIZE) {
-      chunks.push(validKeys.slice(i, i+BATCH_SIZE));
-  }
-
-  const allResults: any[] = [];
-
-  for (const chunk of chunks) {
-    const keysStr = chunk.join(',');
-    const targetUrl = `${BASE_URL}/teams;team_keys=${keysStr}/matchups?format=json`;
-
-    try {
-      const response = await fetch(`${PROXY_URL}${encodeURIComponent(targetUrl)}`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-      });
-
-      if (!response.ok) {
-        console.warn(`Matchup batch failed with status ${response.status}`);
-        continue; 
-      }
-      
-      const json = await response.json();
-      const batchResults = parseMatchups(json);
-      allResults.push(...batchResults);
-      
-    } catch (e) {
-      console.error("Matchup fetch error", e);
-    }
-  }
-
-  return allResults;
-};
-
-const parseMatchups = (json: any) => {
-  const teamsObj = json?.fantasy_content?.teams;
-  if (!teamsObj) return [];
-
-  const results: any[] = [];
-  const count = teamsObj.count;
-
-  for (let i = 0; i < count; i++) {
-    const teamWrapper = teamsObj[i + ""]?.team;
-    if (!teamWrapper) continue;
-
-    const teamMeta = teamWrapper[0];
-    const teamKey = teamMeta?.find((x: any) => x.team_key)?.team_key;
-    const matchupsNode = teamWrapper.find((x: any) => x.matchups)?.matchups;
-    
-    if (matchupsNode && matchupsNode.count) {
-      for (let m = 0; m < matchupsNode.count; m++) {
-         const matchWrapper = matchupsNode[m + ""]?.matchup;
-         if (matchWrapper) {
-            const meta = matchWrapper[0];
-            const teamsNode = meta?.teams;
-
-            let parsedTeams: any[] = [];
-            
-            if (teamsNode && teamsNode.count) {
-              for(let t=0; t < teamsNode.count; t++) {
-                const teamData = teamsNode[t + ""]?.team;
-                if (teamData) {
-                  const tMeta = teamData[0];
-                  const tStats = teamData[1];
-                  
-                  parsedTeams.push({
-                    team_key: tMeta?.find((x:any) => x.team_key)?.team_key,
-                    name: tMeta?.find((x:any) => x.name)?.name,
-                    team_points: tStats?.team_points 
-                  });
-                }
-              }
-            }
-
-            results.push({
-              teamKey, 
-              week: meta?.week,
-              status: meta?.status,
-              isPlayoffs: meta?.is_playoffs === '1', 
-              winner_team_key: meta?.winner_team_key,
-              teams: parsedTeams
-            });
-         }
-      }
-    }
-  }
-  return results;
+    // ... Implementation can remain or be deprecated ...
+    // Since we are moving to offline first, this is less critical but keeping valid placeholder
+    return [];
 };
 
 // Async transformation to allow resolving names
@@ -381,8 +376,6 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
     // 4. Transactions
     const transactions: Transaction[] = [];
     if (transactionsNode && transactionsNode.transactions) {
-        // ... (Transaction logic remains similar, simplified for brevity as request was to remove page)
-        // Keeping logic in case data is needed later
         const txnObj = transactionsNode.transactions;
         const txnCount = txnObj.count;
         for(let t=0; t<txnCount; t++) {
@@ -429,14 +422,14 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
       championId: seasonStandings[0]?.managerId,
       standings: seasonStandings,
       draft: draftPicks.sort((a,b) => a.pick - b.pick),
-      transactions
+      transactions,
+      games: [] // Placeholder, populated in fetchYahooData
     });
   }
 
   // --- RESOLVE PLAYER NAMES ---
   // This runs once per batch of seasons, updating the draft objects in place
   if (unknownPlayerKeys.size > 0) {
-      console.log(`Resolving names for ${unknownPlayerKeys.size} players...`);
       try {
           const nameMap = await fetchPlayerDetails(accessToken, Array.from(unknownPlayerKeys));
           if (nameMap) {

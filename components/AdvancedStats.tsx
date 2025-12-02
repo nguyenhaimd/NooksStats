@@ -4,7 +4,7 @@ import {
   Tooltip, Legend, CartesianGrid, ReferenceLine, BarChart, Bar, Cell 
 } from 'recharts';
 import { LeagueData } from '../types';
-import { Target, TrendingUp, Skull, Zap, Trophy, Medal, AlertTriangle } from 'lucide-react';
+import { Target, TrendingUp, Skull, Zap, Trophy, Medal, AlertTriangle, Activity, Flame } from 'lucide-react';
 
 interface AdvancedStatsProps {
   data: LeagueData;
@@ -14,12 +14,21 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
-      <div className="bg-slate-900 border border-slate-700 p-3 rounded-lg shadow-xl">
+      <div className="bg-slate-900 border border-slate-700 p-3 rounded-lg shadow-xl z-50">
         <p className="font-bold text-white mb-1">{data.name}</p>
         <div className="text-xs space-y-1">
-          <p className="text-indigo-400">Avg PF: <span className="text-white">{data.y.toFixed(1)}</span></p>
-          <p className="text-purple-400">Avg PA: <span className="text-white">{data.x.toFixed(1)}</span></p>
-          <p className="text-slate-500 italic mt-1">{data.quadrant}</p>
+          {data.quadrant ? (
+             <>
+                <p className="text-indigo-400">Avg PF: <span className="text-white">{data.y.toFixed(1)}</span></p>
+                <p className="text-purple-400">Avg PA: <span className="text-white">{data.x.toFixed(1)}</span></p>
+                <p className="text-slate-500 italic mt-1">{data.quadrant}</p>
+             </>
+          ) : (
+             <>
+                <p className="text-indigo-400">Consistency: <span className="text-white">±{data.stdDev.toFixed(1)} pts</span></p>
+                <p className="text-slate-500">Avg Score: {data.avg.toFixed(1)}</p>
+             </>
+          )}
         </div>
       </div>
     );
@@ -45,7 +54,6 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
         if (stand) {
           mPF += stand.stats.pointsFor;
           mPA += stand.stats.pointsAgainst;
-          // Approximate games from wins/losses/ties to get per-game average
           mGames += (stand.stats.wins + stand.stats.losses + stand.stats.ties);
         }
       });
@@ -62,8 +70,8 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
       return {
         id: mgr.id,
         name: mgr.name,
-        x: avgPA, // Points Against (Luck axis)
-        y: avgPF, // Points For (Skill axis)
+        x: avgPA, 
+        y: avgPF, 
         games: mGames
       };
     }).filter(x => x !== null) as any[];
@@ -71,7 +79,6 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
     const leagueAvgPF = totalPF / (managerCounts || 1);
     const leagueAvgPA = totalPA / (managerCounts || 1);
 
-    // Assign Quadrants
     mgrStats.forEach(stat => {
       if (stat.y >= leagueAvgPF && stat.x <= leagueAvgPA) stat.quadrant = "The Juggernaut (Good & Lucky)";
       else if (stat.y >= leagueAvgPF && stat.x > leagueAvgPA) stat.quadrant = "The Glass Cannon (Good but Unlucky)";
@@ -87,7 +94,7 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
     return data.managers.map(mgr => {
       let seasons = 0;
       let playoffs = 0;
-      let finals = 0; // Requires game data usually, but we can infer from rank <= 2
+      let finals = 0;
       let titles = 0;
 
       data.seasons.forEach(s => {
@@ -100,7 +107,7 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
         }
       });
 
-      if (seasons < 2) return null; // Filter out temp managers
+      if (seasons < 1) return null;
 
       return {
         name: mgr.name,
@@ -113,29 +120,40 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
     })
     .filter(x => x !== null)
     .sort((a: any, b: any) => b.titles - a.titles || b.playoffs - a.playoffs)
-    .slice(0, 10); // Top 10
+    .slice(0, 10); 
   }, [data]);
 
-  // --- 3. Game Margins (Require synced game data) ---
-  const gameMargins = useMemo(() => {
+  // --- 3. Game Margins & Scores ---
+  const gameStats = useMemo(() => {
     const allGames: any[] = [];
+    const scoresByManager: Record<string, number[]> = {};
+    const outcomesByManager: Record<string, {result: 'W'|'L'|'T', date: number}[]> = {};
+
     let hasData = false;
+
+    data.managers.forEach(m => {
+        scoresByManager[m.id] = [];
+        outcomesByManager[m.id] = [];
+    });
 
     data.seasons.forEach(s => {
       if (s.games && s.games.length > 0) {
         hasData = true;
-        s.games.forEach(g => {
-          // Ignore ties for margins
-          if (g.teamA.points === 0 || g.teamB.points === 0) return; // Skip dead weeks
+        
+        // Sort games by week to ensure timeline order
+        const sortedGames = [...s.games].sort((a,b) => a.week - b.week);
+
+        sortedGames.forEach(g => {
+          if (g.teamA.points === 0 && g.teamB.points === 0) return;
           
           const diff = Math.abs(g.teamA.points - g.teamB.points);
-          const winner = g.teamA.points > g.teamB.points ? g.teamA : g.teamB;
-          const loser = g.teamA.points > g.teamB.points ? g.teamB : g.teamA;
+          const winner = g.teamA.points >= g.teamB.points ? g.teamA : g.teamB;
+          const loser = g.teamA.points >= g.teamB.points ? g.teamB : g.teamA;
           
-          // Get Manager Names
           const winMgr = data.managers.find(m => m.id === winner.managerId)?.name || 'Unknown';
           const loseMgr = data.managers.find(m => m.id === loser.managerId)?.name || 'Unknown';
 
+          // For Margins
           allGames.push({
             year: s.year,
             week: g.week,
@@ -144,15 +162,70 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
             loser: loseMgr,
             score: `${Math.max(g.teamA.points, g.teamB.points).toFixed(1)} - ${Math.min(g.teamA.points, g.teamB.points).toFixed(1)}`
           });
+
+          // For Consistency
+          if (scoresByManager[g.teamA.managerId]) scoresByManager[g.teamA.managerId].push(g.teamA.points);
+          if (scoresByManager[g.teamB.managerId]) scoresByManager[g.teamB.managerId].push(g.teamB.points);
+
+          // For Streaks (using simplistic date proxy: year * 100 + week)
+          const dateProxy = s.year * 100 + g.week;
+          const isTie = Math.abs(g.teamA.points - g.teamB.points) < 0.01;
+
+          if (outcomesByManager[g.teamA.managerId]) {
+              let res: 'W'|'L'|'T' = isTie ? 'T' : (g.teamA.points > g.teamB.points ? 'W' : 'L');
+              outcomesByManager[g.teamA.managerId].push({ result: res, date: dateProxy });
+          }
+          if (outcomesByManager[g.teamB.managerId]) {
+              let res: 'W'|'L'|'T' = isTie ? 'T' : (g.teamB.points > g.teamA.points ? 'W' : 'L');
+              outcomesByManager[g.teamB.managerId].push({ result: res, date: dateProxy });
+          }
         });
       }
     });
 
     if (!hasData) return null;
 
+    // --- Consistency Logic ---
+    const consistency = Object.entries(scoresByManager).map(([id, scores]) => {
+        if (scores.length < 10) return null; // Need sample size
+        const avg = scores.reduce((a,b) => a+b,0) / scores.length;
+        const variance = scores.reduce((a,b) => a + Math.pow(b - avg, 2), 0) / scores.length;
+        const stdDev = Math.sqrt(variance);
+        const mgr = data.managers.find(m => m.id === id);
+        return { name: mgr?.name || id, stdDev, avg };
+    }).filter(x => x !== null).sort((a,b) => a!.stdDev - b!.stdDev); // Ascending (Lower is better/more consistent)
+
+    // --- Streaks Logic ---
+    const streaks = Object.entries(outcomesByManager).map(([id, outcomes]) => {
+        outcomes.sort((a,b) => a.date - b.date);
+        
+        let maxW = 0, currentW = 0;
+        let maxL = 0, currentL = 0;
+        
+        outcomes.forEach(o => {
+            if (o.result === 'W') {
+                currentW++;
+                currentL = 0;
+                maxW = Math.max(maxW, currentW);
+            } else if (o.result === 'L') {
+                currentL++;
+                currentW = 0;
+                maxL = Math.max(maxL, currentL);
+            } else {
+                currentW = 0;
+                currentL = 0;
+            }
+        });
+        
+        const mgr = data.managers.find(m => m.id === id);
+        return { name: mgr?.name || id, maxW, maxL, avatar: mgr?.avatar };
+    }).sort((a,b) => b.maxW - a.maxW);
+
     return {
       closest: allGames.sort((a,b) => a.diff - b.diff).slice(0, 5),
-      blowouts: allGames.sort((a,b) => b.diff - a.diff).slice(0, 5)
+      blowouts: allGames.sort((a,b) => b.diff - a.diff).slice(0, 5),
+      consistency,
+      streaks: streaks.slice(0, 6) // Top 6 win streaks
     };
   }, [data]);
 
@@ -171,7 +244,7 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
               Avg Points For vs Avg Points Against (All-Time)
             </p>
           </div>
-          <div className="flex gap-2 text-[10px] uppercase font-bold text-slate-500">
+          <div className="flex gap-2 text-[10px] uppercase font-bold text-slate-500 hidden sm:flex">
              <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Juggernaut</div>
              <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-500"></span> Glass Cannon</div>
              <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500"></span> Sleeper</div>
@@ -180,14 +253,6 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
         </div>
         
         <div className="h-[400px] w-full bg-slate-900/50 rounded-lg p-4 border border-slate-700/50 relative">
-          {/* Quadrant Labels Background */}
-          <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 pointer-events-none opacity-10">
-              <div className="flex items-start justify-start p-4 text-yellow-500 font-black uppercase tracking-widest text-xs">The Sleepers<br/>(Lucky)</div>
-              <div className="flex items-start justify-end p-4 text-emerald-500 font-black uppercase tracking-widest text-xs text-right">The Juggernauts<br/>(Dominant)</div>
-              <div className="flex items-end justify-start p-4 text-red-500 font-black uppercase tracking-widest text-xs">The Sackos<br/>(Bad Luck)</div>
-              <div className="flex items-end justify-end p-4 text-indigo-500 font-black uppercase tracking-widest text-xs text-right">Glass Cannons<br/>(Unlucky)</div>
-          </div>
-
           <ResponsiveContainer width="100%" height="100%">
             <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
@@ -216,10 +281,10 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
 
               <Scatter name="Managers" data={luckData.mgrStats} fill="#8884d8">
                 {luckData.mgrStats.map((entry, index) => {
-                   let fill = '#ef4444'; // Red (Sacko)
-                   if (entry.y >= luckData.leagueAvgPF && entry.x <= luckData.leagueAvgPA) fill = '#10b981'; // Emerald (Jug)
-                   else if (entry.y >= luckData.leagueAvgPF && entry.x > luckData.leagueAvgPA) fill = '#6366f1'; // Indigo (Cannon)
-                   else if (entry.y < luckData.leagueAvgPF && entry.x <= luckData.leagueAvgPA) fill = '#eab308'; // Yellow (Sleeper)
+                   let fill = '#ef4444'; 
+                   if (entry.y >= luckData.leagueAvgPF && entry.x <= luckData.leagueAvgPA) fill = '#10b981';
+                   else if (entry.y >= luckData.leagueAvgPF && entry.x > luckData.leagueAvgPA) fill = '#6366f1';
+                   else if (entry.y < luckData.leagueAvgPF && entry.x <= luckData.leagueAvgPA) fill = '#eab308';
 
                    return <Cell key={`cell-${index}`} fill={fill} stroke="white" strokeWidth={1} />;
                 })}
@@ -249,6 +314,7 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
                     <Tooltip 
                       cursor={{fill: '#334155', opacity: 0.2}}
                       contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                      itemStyle={{ color: '#e2e8f0' }}
                     />
                     <Legend iconSize={8} fontSize={10} />
                     <Bar dataKey="playoffs" name="Playoff Apps" stackId="a" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={12} />
@@ -268,7 +334,7 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
               <p className="text-slate-400 text-sm">Historical Matchup Margins</p>
             </div>
 
-            {!gameMargins ? (
+            {!gameStats ? (
                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 border border-dashed border-slate-700 rounded-xl bg-slate-900/30">
                   <AlertTriangle className="w-8 h-8 text-slate-600 mb-2" />
                   <p className="text-slate-400 text-sm">Matchup data not found.</p>
@@ -282,7 +348,7 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
                         <Medal className="w-3 h-3" /> Heartbreakers (Closest)
                      </h4>
                      <div className="space-y-2">
-                        {gameMargins.closest.map((g: any, i: number) => (
+                        {gameStats.closest.map((g: any, i: number) => (
                            <div key={i} className="bg-slate-900/50 p-2 rounded text-xs border border-slate-700/50 flex justify-between items-center">
                               <div>
                                  <span className="text-white font-bold">{g.diff.toFixed(2)} pts</span>
@@ -303,7 +369,7 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
                         <Skull className="w-3 h-3" /> Blowouts (Biggest)
                      </h4>
                      <div className="space-y-2">
-                        {gameMargins.blowouts.map((g: any, i: number) => (
+                        {gameStats.blowouts.map((g: any, i: number) => (
                            <div key={i} className="bg-slate-900/50 p-2 rounded text-xs border border-slate-700/50 flex justify-between items-center">
                               <div>
                                  <span className="text-white font-bold">{g.diff.toFixed(0)} pts</span>
@@ -321,6 +387,64 @@ export const AdvancedStats: React.FC<AdvancedStatsProps> = ({ data }) => {
             )}
         </div>
       </div>
+
+      {gameStats && gameStats.consistency && (
+         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* ROW 3 LEFT: Consistency */}
+            <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-xl p-6">
+                <div className="mb-6">
+                   <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                     <Activity className="w-5 h-5 text-indigo-400" />
+                     The Rock
+                   </h3>
+                   <p className="text-slate-400 text-sm">Most Consistent Scorers (Lowest Std Dev)</p>
+                </div>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                     <BarChart data={gameStats.consistency.slice(0, 8)} layout="vertical" margin={{ left: 40, right: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                        <XAxis type="number" stroke="#94a3b8" fontSize={10} tickFormatter={(v) => `±${v}`} />
+                        <YAxis dataKey="name" type="category" stroke="#e2e8f0" fontSize={11} width={100} tick={{fill: '#e2e8f0'}} />
+                        <Tooltip 
+                            cursor={{fill: '#334155', opacity: 0.2}}
+                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                            itemStyle={{ color: '#e2e8f0' }}
+                            formatter={(val: number) => [`±${val.toFixed(2)} pts`, "Std Dev"]}
+                        />
+                        <Bar dataKey="stdDev" fill="#818cf8" radius={[0, 4, 4, 0]} barSize={16} />
+                     </BarChart>
+                  </ResponsiveContainer>
+                </div>
+            </div>
+
+            {/* ROW 3 RIGHT: Win Streaks */}
+            <div className="bg-slate-800 rounded-xl border border-slate-700 shadow-xl p-6">
+                 <div className="mb-6">
+                   <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                     <Flame className="w-5 h-5 text-orange-500" />
+                     The Streak
+                   </h3>
+                   <p className="text-slate-400 text-sm">Longest Consecutive Wins (All-Time)</p>
+                </div>
+                <div className="space-y-3">
+                   {gameStats.streaks.map((s: any, idx: number) => (
+                      <div key={idx} className="flex items-center gap-4 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                          <div className="text-2xl font-black text-slate-600 w-8 text-center">{idx + 1}</div>
+                          <img src={s.avatar} alt="" className="w-10 h-10 rounded-full border border-slate-600" />
+                          <div className="flex-1">
+                             <div className="font-bold text-white">{s.name}</div>
+                             <div className="text-xs text-slate-500">Max Loss Streak: {s.maxL}</div>
+                          </div>
+                          <div className="text-right">
+                             <div className="text-2xl font-bold text-orange-500">{s.maxW}</div>
+                             <div className="text-[10px] uppercase text-orange-500/70 font-bold tracking-wider">Games</div>
+                          </div>
+                      </div>
+                   ))}
+                </div>
+            </div>
+         </div>
+      )}
 
     </div>
   );
