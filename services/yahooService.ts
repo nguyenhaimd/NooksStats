@@ -26,7 +26,7 @@ const NFL_GAME_KEYS = [
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Robust fetch with retry logic
-const fetchWithRetry = async (url: string, accessToken: string, retries = 3, backoff = 1000): Promise<Response> => {
+const fetchWithRetry = async (url: string, accessToken: string, retries = 5, backoff = 2000): Promise<Response> => {
   try {
     const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
@@ -143,11 +143,11 @@ export const fetchYahooData = async (
             const teamMap = new Map<string, string>();
             season.standings.forEach(s => teamMap.set(s.teamKey, s.managerId));
 
-            // Fetch games with robust chunking
-            season.games = await fetchSeasonGames(season.key, accessToken, teamMap);
+            // Fetch games week by week
+            season.games = await fetchSeasonGames(season.key, accessToken, teamMap, season.year, onProgress);
             
             // Polite delay between seasons
-            await wait(500); 
+            await wait(1000); 
 
         } catch (e) {
             console.warn(`Failed to fetch matchups for season ${season.year}`, e);
@@ -164,28 +164,31 @@ export const fetchYahooData = async (
   return { managers, seasons: allSeasons };
 };
 
-const fetchSeasonGames = async (leagueKey: string, accessToken: string, teamMap: Map<string, string>): Promise<Game[]> => {
-    // Split into small chunks of weeks (4 weeks) to prevent large payloads/timeouts
-    // A standard fantasy season is ~16-18 weeks.
-    const weekChunks = [
-        [1,2,3,4],
-        [5,6,7,8],
-        [9,10,11,12],
-        [13,14,15,16],
-        [17,18]
-    ];
-    
+const fetchSeasonGames = async (
+    leagueKey: string, 
+    accessToken: string, 
+    teamMap: Map<string, string>, 
+    year: number,
+    onProgress?: (status: string) => void
+): Promise<Game[]> => {
     const games: Game[] = [];
     
-    // Process chunks sequentially
-    for (const weeks of weekChunks) {
-        const weeksStr = weeks.join(',');
-        const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${weeksStr}?format=json`;
+    // Fetch weeks 1 through 18 sequentially.
+    // NOTE: Even if a season was shorter (e.g., 16 weeks), fetching 17/18 returns empty matchups which is handled safely.
+    // This is "meticulous" mode.
+    for (let week = 1; week <= 18; week++) {
+        const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${week}?format=json`;
         
+        if (onProgress) onProgress(`Fetching ${year} Week ${week}...`);
+
         try {
-            const response = await fetchWithRetry(url, accessToken, 3, 1500);
+            // High retry count, longer backoff
+            const response = await fetchWithRetry(url, accessToken, 5, 2000);
             
-            if (!response.ok) continue;
+            if (!response.ok) {
+                console.warn(`Skipping Week ${week} due to API Error ${response.status}`);
+                continue;
+            }
 
             const json = await response.json();
             const leagueNode = json?.fantasy_content?.leagues?.[0]?.league;
@@ -195,9 +198,14 @@ const fetchSeasonGames = async (leagueKey: string, accessToken: string, teamMap:
             if (!scoreboard) continue;
 
             const matchupsNode = scoreboard[0]?.matchups;
-            if (!matchupsNode) continue;
+            
+            // Check if matchups exist and have a count
+            if (!matchupsNode || matchupsNode === '0' || (typeof matchupsNode === 'object' && matchupsNode.count === '0')) {
+                // No matchups this week (e.g., week 18 in a 16 week season)
+                continue;
+            }
 
-            const count = matchupsNode.count;
+            const count = parseInt(matchupsNode.count);
             for(let i=0; i<count; i++) {
                 const matchupWrapper = matchupsNode[i + ""]?.matchup;
                 if (!matchupWrapper) continue;
@@ -210,6 +218,7 @@ const fetchSeasonGames = async (leagueKey: string, accessToken: string, teamMap:
                      const team0Data = teamsWrapper["0"]?.team;
                      const team1Data = teamsWrapper["1"]?.team;
                      
+                     // Need both teams for a H2H game (skip Byes)
                      if (team0Data && team1Data) {
                          const t0Key = team0Data[0]?.find((x:any) => x.team_key)?.team_key;
                          const t0PtsObj = team0Data.find((x:any) => x.team_points)?.team_points;
@@ -235,11 +244,11 @@ const fetchSeasonGames = async (leagueKey: string, accessToken: string, teamMap:
                      }
                 }
             }
-            // Polite delay between chunks
-            await wait(300);
+            // Polite delay between every single week request
+            await wait(750);
 
         } catch (e) {
-            console.warn(`Error fetching games chunk ${weeksStr} for league ${leagueKey}`, e);
+            console.warn(`Error fetching games for ${year} week ${week}`, e);
         }
     }
 
