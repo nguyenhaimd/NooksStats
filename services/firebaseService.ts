@@ -1,4 +1,4 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import * as firebaseApp from 'firebase/app';
 import { getDatabase, ref, set, get, child, update } from 'firebase/database';
 import { LeagueData } from '../types';
 
@@ -16,10 +16,10 @@ let app: any;
 let db: any;
 
 export const initFirebase = (config: FirebaseConfig) => {
-  if (getApps().length === 0) {
-    app = initializeApp(config);
+  if (firebaseApp.getApps().length === 0) {
+    app = firebaseApp.initializeApp(config);
   } else {
-    app = getApp();
+    app = firebaseApp.getApp();
   }
   db = getDatabase(app);
   return app;
@@ -29,22 +29,31 @@ export const getFirebaseInstance = () => db;
 
 // -- API --
 
+const sanitizeData = (data: any) => {
+  // Recursively remove undefined values by serializing/deserializing
+  // JSON.stringify automatically strips keys with undefined values
+  return JSON.parse(JSON.stringify(data));
+};
+
 export const saveLeagueToFirebase = async (leagueId: string, leagueName: string, data: LeagueData) => {
   if (!db) throw new Error("Database not initialized");
   
   const cleanId = leagueId.replace(/\./g, '_'); // Firebase keys can't contain '.'
+  
+  // Clean the data to ensure no undefined values exist
+  const cleanData = sanitizeData(data);
   
   // Save Meta
   await update(ref(db, `leagues/${cleanId}/meta`), {
     id: leagueId,
     name: leagueName,
     lastUpdated: Date.now(),
-    seasonCount: data.seasons.length,
-    latestSeason: data.seasons[data.seasons.length - 1]?.year
+    seasonCount: cleanData.seasons.length,
+    latestSeason: cleanData.seasons[cleanData.seasons.length - 1]?.year
   });
 
   // Save Data
-  await set(ref(db, `leagues/${cleanId}/data`), data);
+  await set(ref(db, `leagues/${cleanId}/data`), cleanData);
 };
 
 export const fetchLeagueFromFirebase = async (leagueId: string): Promise<LeagueData | null> => {

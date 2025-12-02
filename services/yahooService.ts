@@ -319,7 +319,9 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
         const guid = managerData.guid;
         const rawNickname = managerData.nickname;
         const teamName = teamMeta.find((x: any) => x.name)?.name?.replace(/&#39;/g, "'") || "Unknown Team";
-        const avatar = managerData.image_url;
+        
+        // Provide a default avatar if missing to prevent Firebase undefined errors
+        const avatar = managerData.image_url || 'https://s.yimg.com/dh/ap/fantasy/img/profile/icon_user_default.png';
 
         // Register TeamKey -> GUID mapping
         if (teamKey && guid) {
@@ -388,8 +390,8 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
         draftPicks.push({
           round: pickObj.round,
           pick: pickObj.pick,
-          player: "Player #" + playerKey?.split('.').pop(), // Default fallback 
-          playerKey: playerKey,
+          player: "Player #" + (playerKey?.split('.').pop() || 'Unknown'), 
+          playerKey: playerKey || undefined, // undefined is stripped by JSON.stringify later, ensuring no "undefined" string literal
           managerId: mgrId,
           teamKey: tKey
         });
