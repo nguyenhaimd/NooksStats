@@ -1,4 +1,4 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import firebase from 'firebase/compat/app';
 import { getDatabase, ref, set, get, child, update } from 'firebase/database';
 import { LeagueData } from '../types';
 
@@ -16,10 +16,10 @@ let app: any;
 let db: any;
 
 export const initFirebase = (config: FirebaseConfig) => {
-  if (getApps().length === 0) {
-    app = initializeApp(config);
+  if (firebase.apps.length === 0) {
+    app = firebase.initializeApp(config);
   } else {
-    app = getApp();
+    app = firebase.app();
   }
   db = getDatabase(app);
   return app;

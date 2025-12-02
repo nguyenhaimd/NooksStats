@@ -1,65 +1,18 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { LeagueData, DraftPick } from '../types';
-import { Search, Filter, Loader2 } from 'lucide-react';
-import { fetchPlayerDetails } from '../services/yahooService';
+import React, { useState, useMemo } from 'react';
+import { LeagueData } from '../types';
+import { Search, Filter } from 'lucide-react';
 
 interface DraftHistoryProps {
   data: LeagueData;
   token: string;
 }
 
-export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
+export const DraftHistory: React.FC<DraftHistoryProps> = ({ data }) => {
   const [selectedYear, setSelectedYear] = useState<number>(data.seasons[data.seasons.length - 1].year);
   const [searchTerm, setSearchTerm] = useState('');
-  const [playerNames, setPlayerNames] = useState<Record<string, string>>({});
-  const [failedKeys, setFailedKeys] = useState<Set<string>>(new Set());
-  const [loadingNames, setLoadingNames] = useState(false);
 
   const availableYears = data.seasons.map(s => s.year).sort((a, b) => b - a);
   const activeSeason = data.seasons.find(s => s.year === selectedYear);
-
-  // Effect to fetch player names for the current season if they are missing
-  useEffect(() => {
-    const fetchNames = async () => {
-      if (!activeSeason || !activeSeason.draft || !token) return;
-      
-      const missingKeys = activeSeason.draft
-        .filter(p => p.playerKey && !playerNames[p.playerKey] && !failedKeys.has(p.playerKey))
-        .map(p => p.playerKey as string);
-
-      if (missingKeys.length > 0) {
-        setLoadingNames(true);
-        try {
-          // Check if it's mock data or real data
-          if (missingKeys[0].startsWith('mock')) {
-             setLoadingNames(false);
-             return;
-          }
-
-          const newNames = await fetchPlayerDetails(token, missingKeys);
-          setPlayerNames(prev => ({ ...prev, ...newNames }));
-          
-          // Mark keys that weren't returned as failed so we don't loop
-          const returnedKeys = Object.keys(newNames);
-          const nowFailed = missingKeys.filter(k => !returnedKeys.includes(k));
-          if (nowFailed.length > 0) {
-              setFailedKeys(prev => {
-                  const next = new Set(prev);
-                  nowFailed.forEach(k => next.add(k));
-                  return next;
-              });
-          }
-
-        } catch (e) {
-          console.error("Failed to load player names", e);
-        } finally {
-          setLoadingNames(false);
-        }
-      }
-    };
-    
-    fetchNames();
-  }, [activeSeason, token]);
 
   const filteredPicks = useMemo(() => {
     if (!activeSeason?.draft) return [];
@@ -68,16 +21,13 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
       const mgr = data.managers.find(m => m.id === pick.managerId);
       const mgrName = mgr ? mgr.name.toLowerCase() : '';
       const term = searchTerm.toLowerCase();
-      
-      const pName = pick.playerKey && playerNames[pick.playerKey] 
-        ? playerNames[pick.playerKey] 
-        : pick.player;
+      const pName = pick.player || "Unknown Player";
 
       return mgrName.includes(term) || 
              pName.toLowerCase().includes(term) ||
              pick.pick.toString() === term;
     });
-  }, [activeSeason, searchTerm, data.managers, playerNames]);
+  }, [activeSeason, searchTerm, data.managers]);
 
   if (!activeSeason) return <div>No data</div>;
 
@@ -92,7 +42,6 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
           </h3>
           <p className="text-slate-400 text-xs mt-1 flex items-center gap-2">
              {activeSeason.draft ? `${activeSeason.draft.length} picks recorded` : 'No draft data available'}
-             {loadingNames && <span className="flex items-center text-indigo-400 gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Resolving names...</span>}
           </p>
         </div>
 
@@ -109,7 +58,7 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
              <input 
                type="text" 
-               placeholder="Search manager..." 
+               placeholder="Search manager or player..." 
                value={searchTerm}
                onChange={(e) => setSearchTerm(e.target.value)}
                className="w-full bg-slate-900 pl-10 pr-4 py-2 rounded-lg border border-slate-600 text-white focus:ring-2 focus:ring-emerald-500 outline-none placeholder-slate-600"
@@ -137,9 +86,6 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
             <tbody className="divide-y divide-slate-700/50">
               {filteredPicks.map((pick) => {
                  const mgr = data.managers.find(m => m.id === pick.managerId);
-                 const resolvedName = pick.playerKey ? playerNames[pick.playerKey] : null;
-                 // If we have a key, haven't resolved it, and haven't failed yet -> Loading
-                 const isLoading = pick.playerKey && !resolvedName && !failedKeys.has(pick.playerKey);
                  
                  return (
                    <tr key={`${pick.round}-${pick.pick}`} className="hover:bg-slate-700/30 transition-colors">
@@ -156,14 +102,7 @@ export const DraftHistory: React.FC<DraftHistoryProps> = ({ data, token }) => {
                        </div>
                      </td>
                      <td className="px-6 py-4 text-slate-300">
-                        {resolvedName ? (
-                           <span className="text-white font-medium">{resolvedName}</span>
-                        ) : isLoading ? (
-                           <span className="text-slate-500 italic text-xs">Loading...</span>
-                        ) : (
-                           // Fallback to original "Player #..." or just the ID if failed
-                           <span>{pick.player}</span>
-                        )}
+                       <span className="text-white font-medium">{pick.player}</span>
                      </td>
                    </tr>
                  );

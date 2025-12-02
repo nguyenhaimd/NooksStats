@@ -9,7 +9,6 @@ import { LeagueOracle } from './components/LeagueOracle';
 import { LeagueRecords } from './components/LeagueRecords';
 import { Versus } from './components/Versus';
 import { DraftHistory } from './components/DraftHistory';
-import { TransactionLog } from './components/TransactionLog';
 
 // --- SUB COMPONENTS ---
 
@@ -314,16 +313,7 @@ const App: React.FC = () => {
       // Fetch Data
       const newData = await fetchYahooData(yahooToken, leaguesToSync);
       
-      // We need to save this data. 
-      // NOTE: `fetchYahooData` currently merges multiple leagues into one `LeagueData` object.
-      // If the user selects multiple unrelated leagues (e.g. League A 2022, League B 2023), 
-      // the service merges them.
-      // Ideally, we should fetch/save per league if they are distinct entities. 
-      // But `fetchYahooData` is designed to build a *history* of one league (League Legacy).
-      // So we treat the selection as "One Logical League's History".
-      
-      // We use the most recent league key as the primary ID for this legacy chain
-      const primaryKey = leaguesToSync[0]; // Simplification: Use first selected as ID
+      const primaryKey = leaguesToSync[0]; 
       const primaryName = discoveryLeagues.find(l => l.key === primaryKey)?.name || "Unknown League";
 
       await saveLeagueToFirebase(primaryKey, primaryName, newData);
@@ -514,7 +504,6 @@ const App: React.FC = () => {
                <NavButton v={ViewState.STANDINGS} icon={Table2} label="Standings" />
                <NavButton v={ViewState.VERSUS} icon={Swords} label="Versus" />
                <NavButton v={ViewState.DRAFT} icon={Gavel} label="Drafts" />
-               <NavButton v={ViewState.TRANSACTIONS} icon={UserPlus} label="Moves" />
                <NavButton v={ViewState.HISTORY} icon={History} label="Stats" />
             </div>
             
@@ -564,7 +553,6 @@ const App: React.FC = () => {
             {view === ViewState.STANDINGS && <div className="animate-in fade-in duration-300"><StandingsTable data={leagueData} /></div>}
             {view === ViewState.VERSUS && <Versus data={leagueData} token={yahooToken} />}
             {view === ViewState.DRAFT && <DraftHistory data={leagueData} token={yahooToken} />}
-            {view === ViewState.TRANSACTIONS && <TransactionLog data={leagueData} />}
             {view === ViewState.HISTORY && (
               <div className="space-y-8 animate-in fade-in duration-300">
                 <HistoryChart data={leagueData} />

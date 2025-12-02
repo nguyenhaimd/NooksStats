@@ -89,8 +89,7 @@ export const fetchYahooData = async (accessToken: string, leagueKeys: string[]):
   const allSeasons: Season[] = [];
   const allManagersMap = new Map<string, any>();
 
-  // Process batches sequentially (or Promise.all if we want speed, but Yahoo is sensitive to burst)
-  // We'll use sequential to map managers correctly across batches
+  // Process batches sequentially to map managers correctly across batches
   for (const chunk of chunks) {
      const keysString = chunk.join(',');
      const targetUrl = `${BASE_URL}/leagues;league_keys=${keysString};out=standings,draftresults,transactions?format=json`;
@@ -106,7 +105,8 @@ export const fetchYahooData = async (accessToken: string, leagueKeys: string[]):
      }
 
      const json = await response.json();
-     const { managers, seasons } = transformYahooData(json, allManagersMap); // Pass map to accumulate
+     // We await here because transformYahooData now fetches player names
+     const { managers, seasons } = await transformYahooData(json, accessToken, allManagersMap); 
      allSeasons.push(...seasons);
   }
 
@@ -117,7 +117,7 @@ export const fetchYahooData = async (accessToken: string, leagueKeys: string[]):
 };
 
 export const fetchPlayerDetails = async (accessToken: string, playerKeys: string[]) => {
-  const uniqueKeys = Array.from(new Set(playerKeys));
+  const uniqueKeys = Array.from(new Set(playerKeys)).filter(k => !!k);
   if (uniqueKeys.length === 0) return {};
 
   const map: Record<string, string> = {};
@@ -145,14 +145,11 @@ export const fetchPlayerDetails = async (accessToken: string, playerKeys: string
         
         if (!players || !players.count) return;
         
-        // Yahoo returns an object where keys are "0", "1", etc. plus "count"
         for (let i = 0; i < players.count; i++) {
-           const pObj = players[i + ""]; // Explicit string conversion for index
+           const pObj = players[i + ""]; 
            const pArr = pObj?.player;
            if (!pArr) continue;
            
-           // pArr[0] is typically the metadata array
-           // We look for the object containing 'name'
            const metaArr = Array.isArray(pArr) ? pArr[0] : null;
            
            if (Array.isArray(metaArr)) {
@@ -171,14 +168,10 @@ export const fetchPlayerDetails = async (accessToken: string, playerKeys: string
 };
 
 export const fetchMatchups = async (accessToken: string, teamKeys: string[]) => {
-  // Filter out empty or invalid keys to prevent API errors
-  // Ensure key structure looks like "123.l.456.t.7"
   const validKeys = teamKeys.filter(k => k && k.includes('.t.'));
   
   if (validKeys.length === 0) return [];
   
-  // Yahoo batch limit is technically 25, but fetching matchups is heavy.
-  // Reducing batch size to 5 to avoid timeouts and header size issues.
   const BATCH_SIZE = 5;
   const chunks = [];
   for(let i=0; i<validKeys.length; i+=BATCH_SIZE) {
@@ -207,7 +200,6 @@ export const fetchMatchups = async (accessToken: string, teamKeys: string[]) => 
       
     } catch (e) {
       console.error("Matchup fetch error", e);
-      // Continue to next chunk even if one fails
     }
   }
 
@@ -222,21 +214,17 @@ const parseMatchups = (json: any) => {
   const count = teamsObj.count;
 
   for (let i = 0; i < count; i++) {
-    const teamWrapper = teamsObj[i + ""]?.team; // Use string index
+    const teamWrapper = teamsObj[i + ""]?.team;
     if (!teamWrapper) continue;
 
     const teamMeta = teamWrapper[0];
     const teamKey = teamMeta?.find((x: any) => x.team_key)?.team_key;
-    
-    // Matchups are usually at index 1 or found via property
     const matchupsNode = teamWrapper.find((x: any) => x.matchups)?.matchups;
     
     if (matchupsNode && matchupsNode.count) {
       for (let m = 0; m < matchupsNode.count; m++) {
-         const matchWrapper = matchupsNode[m + ""]?.matchup; // Use string index
+         const matchWrapper = matchupsNode[m + ""]?.matchup;
          if (matchWrapper) {
-            // Yahoo Matchup structure is messy. Usually:
-            // matchWrapper[0] -> metadata { week, status, is_playoffs, winner_team_key, teams: {...} }
             const meta = matchWrapper[0];
             const teamsNode = meta?.teams;
 
@@ -246,27 +234,25 @@ const parseMatchups = (json: any) => {
               for(let t=0; t < teamsNode.count; t++) {
                 const teamData = teamsNode[t + ""]?.team;
                 if (teamData) {
-                  // teamData[0] -> metadata
-                  // teamData[1] -> stats (team_points)
                   const tMeta = teamData[0];
                   const tStats = teamData[1];
                   
                   parsedTeams.push({
                     team_key: tMeta?.find((x:any) => x.team_key)?.team_key,
                     name: tMeta?.find((x:any) => x.name)?.name,
-                    team_points: tStats?.team_points // { total: "100.00", week: "1" }
+                    team_points: tStats?.team_points 
                   });
                 }
               }
             }
 
             results.push({
-              teamKey, // The key of the primary team we queried
+              teamKey, 
               week: meta?.week,
               status: meta?.status,
               isPlayoffs: meta?.is_playoffs === '1', 
               winner_team_key: meta?.winner_team_key,
-              teams: parsedTeams // Now a clean array
+              teams: parsedTeams
             });
          }
       }
@@ -275,16 +261,18 @@ const parseMatchups = (json: any) => {
   return results;
 };
 
-// Modified to accept an existing map for batch accumulation
-const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()): { seasons: Season[], managers: any } => {
+// Async transformation to allow resolving names
+const transformYahooData = async (data: any, accessToken: string, managersMap: Map<string, any> = new Map()): Promise<{ seasons: Season[], managers: any }> => {
   const teamKeyToManagerId = new Map<string, string>();
   const seasons: Season[] = [];
 
   const leaguesObj = data?.fantasy_content?.leagues;
-  if (!leaguesObj) return { seasons: [], managers: managersMap }; // Graceful exit if chunk is empty
+  if (!leaguesObj) return { seasons: [], managers: managersMap };
 
   const count = leaguesObj.count;
+  const unknownPlayerKeys = new Set<string>();
   
+  // First Pass: Extract structure and collect unknown player keys
   for (let i = 0; i < count; i++) {
     const leagueData = leaguesObj[i + ""]?.league;
     if (!leagueData) continue;
@@ -294,7 +282,6 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
     const leagueKey = metadata.league_key;
     const year = parseInt(metadata.season);
 
-    // 2. Standings (index 1 usually, but order can vary with 'out' param, so we search)
     const standingsNode = leagueData.find((n: any) => n.standings);
     const draftNode = leagueData.find((n: any) => n.draft_results);
     const transactionsNode = leagueData.find((n: any) => n.transactions);
@@ -319,16 +306,12 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
         const guid = managerData.guid;
         const rawNickname = managerData.nickname;
         const teamName = teamMeta.find((x: any) => x.name)?.name?.replace(/&#39;/g, "'") || "Unknown Team";
-        
-        // Provide a default avatar if missing to prevent Firebase undefined errors
         const avatar = managerData.image_url || 'https://s.yimg.com/dh/ap/fantasy/img/profile/icon_user_default.png';
 
-        // Register TeamKey -> GUID mapping
         if (teamKey && guid) {
           teamKeyToManagerId.set(teamKey, guid);
         }
 
-        // Manager Processing (Handle hidden names)
         const isHidden = rawNickname === '--hidden--';
         const displayName = isHidden ? teamName : rawNickname;
 
@@ -344,7 +327,6 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
         } else {
            const existingIsFallback = existing._isFallback;
            const isNewer = year > existing._lastSeenYear;
-
            if (existingIsFallback && !isHidden) {
              managersMap.set(guid, { id: guid, name: displayName, avatar, _lastSeenYear: year, _isFallback: false });
            } else if (isNewer && (existingIsFallback === isHidden)) {
@@ -352,24 +334,19 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
            }
         }
 
-        // Stats
         const outcome = teamStandingsObj.outcome_totals;
-        const pointsFor = parseFloat(teamStandingsObj.points_for);
-        const pointsAgainst = parseFloat(teamStandingsObj.points_against);
-        const rank = teamStandingsObj.rank;
-
         seasonStandings.push({
           managerId: guid,
           teamKey: teamKey || '',
           stats: {
-            rank: rank,
+            rank: teamStandingsObj.rank,
             wins: parseInt(outcome.wins),
             losses: parseInt(outcome.losses),
             ties: parseInt(outcome.ties),
-            pointsFor,
-            pointsAgainst,
-            isChampion: rank === 1,
-            isPlayoff: rank <= 4 
+            pointsFor: parseFloat(teamStandingsObj.points_for),
+            pointsAgainst: parseFloat(teamStandingsObj.points_against),
+            isChampion: teamStandingsObj.rank === 1,
+            isPlayoff: teamStandingsObj.rank <= 4 
           }
         });
       }
@@ -387,11 +364,14 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
         const mgrId = teamKeyToManagerId.get(tKey) || 'unknown';
         const playerKey = pickObj.player_key;
         
+        // Collect key for resolving
+        if (playerKey) unknownPlayerKeys.add(playerKey);
+
         draftPicks.push({
           round: pickObj.round,
           pick: pickObj.pick,
-          player: "Player #" + (playerKey?.split('.').pop() || 'Unknown'), 
-          playerKey: playerKey || undefined, // undefined is stripped by JSON.stringify later, ensuring no "undefined" string literal
+          player: "Unknown Player", // Placeholder, will update later
+          playerKey: playerKey || undefined,
           managerId: mgrId,
           teamKey: tKey
         });
@@ -401,58 +381,46 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
     // 4. Transactions
     const transactions: Transaction[] = [];
     if (transactionsNode && transactionsNode.transactions) {
-      const txnObj = transactionsNode.transactions;
-      const txnCount = txnObj.count;
-      for(let t=0; t<txnCount; t++) {
-        const txn = txnObj[t + ""]?.transaction;
-        if(!txn) continue;
-        
-        // Extract metadata
-        const txnId = txn[0].transaction_id;
-        const type = txn[0].type;
-        const timestamp = txn[0].timestamp;
-        
-        // Players involved
-        const playersNode = txn.find((n: any) => n.players)?.players;
-        const playersInvolved: any[] = [];
-        const mgrsInvolved = new Set<string>();
+        // ... (Transaction logic remains similar, simplified for brevity as request was to remove page)
+        // Keeping logic in case data is needed later
+        const txnObj = transactionsNode.transactions;
+        const txnCount = txnObj.count;
+        for(let t=0; t<txnCount; t++) {
+            const txn = txnObj[t + ""]?.transaction;
+            if(!txn) continue;
+            const txnId = txn[0].transaction_id;
+            const type = txn[0].type;
+            const timestamp = txn[0].timestamp;
+            const playersNode = txn.find((n: any) => n.players)?.players;
+            const playersInvolved: any[] = [];
+            const mgrsInvolved = new Set<string>();
 
-        if (playersNode) {
-           for(let p=0; p<playersNode.count; p++) {
-              const pData = playersNode[p + ""]?.player;
-              if(!pData) continue;
-              
-              const pInfo = pData[0]; // metadata
-              const txnData = pData[1]?.transaction_data;
-              const pName = pInfo.find((x:any) => x.name)?.name?.full || 'Unknown';
-              
-              const destTeam = txnData?.[0]?.destination_team_key;
-              const sourceTeam = txnData?.[0]?.source_team_key;
-              
-              // Add logic
-              if (txnData?.[0]?.type === 'add') {
-                 const mId = teamKeyToManagerId.get(destTeam) || '';
-                 if(mId) mgrsInvolved.add(mId);
-                 playersInvolved.push({ name: pName, type: 'add', managerId: mId });
-              } else if (txnData?.[0]?.type === 'drop') {
-                 const mId = teamKeyToManagerId.get(sourceTeam) || '';
-                 if(mId) mgrsInvolved.add(mId);
-                 playersInvolved.push({ name: pName, type: 'drop', managerId: mId });
-              }
-           }
+            if (playersNode) {
+            for(let p=0; p<playersNode.count; p++) {
+                const pData = playersNode[p + ""]?.player;
+                if(!pData) continue;
+                const pInfo = pData[0];
+                const txnData = pData[1]?.transaction_data;
+                const pName = pInfo.find((x:any) => x.name)?.name?.full || 'Unknown';
+                const destTeam = txnData?.[0]?.destination_team_key;
+                const sourceTeam = txnData?.[0]?.source_team_key;
+                if (txnData?.[0]?.type === 'add') {
+                    const mId = teamKeyToManagerId.get(destTeam) || '';
+                    if(mId) mgrsInvolved.add(mId);
+                    playersInvolved.push({ name: pName, type: 'add', managerId: mId });
+                } else if (txnData?.[0]?.type === 'drop') {
+                    const mId = teamKeyToManagerId.get(sourceTeam) || '';
+                    if(mId) mgrsInvolved.add(mId);
+                    playersInvolved.push({ name: pName, type: 'drop', managerId: mId });
+                }
+            }
+            }
+            transactions.push({
+            id: txnId, type, date: parseInt(timestamp) * 1000, managerIds: Array.from(mgrsInvolved), players: playersInvolved
+            });
         }
-        
-        transactions.push({
-          id: txnId,
-          type,
-          date: parseInt(timestamp) * 1000,
-          managerIds: Array.from(mgrsInvolved),
-          players: playersInvolved
-        });
-      }
     }
 
-    // Sort Standings
     seasonStandings.sort((a, b) => a.stats.rank - b.stats.rank);
 
     seasons.push({
@@ -463,6 +431,28 @@ const transformYahooData = (data: any, managersMap: Map<string, any> = new Map()
       draft: draftPicks.sort((a,b) => a.pick - b.pick),
       transactions
     });
+  }
+
+  // --- RESOLVE PLAYER NAMES ---
+  // This runs once per batch of seasons, updating the draft objects in place
+  if (unknownPlayerKeys.size > 0) {
+      console.log(`Resolving names for ${unknownPlayerKeys.size} players...`);
+      try {
+          const nameMap = await fetchPlayerDetails(accessToken, Array.from(unknownPlayerKeys));
+          if (nameMap) {
+              seasons.forEach(season => {
+                  if (season.draft) {
+                      season.draft.forEach(pick => {
+                          if (pick.playerKey && nameMap[pick.playerKey]) {
+                              pick.player = nameMap[pick.playerKey];
+                          }
+                      });
+                  }
+              });
+          }
+      } catch (e) {
+          console.error("Failed to resolve batch player names", e);
+      }
   }
 
   return { seasons, managers: managersMap };

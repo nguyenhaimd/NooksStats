@@ -1,15 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { LeagueData } from '../types';
-import { Trophy, ArrowUpDown, ChevronUp, ChevronDown, Medal, AlertCircle } from 'lucide-react';
+import { Trophy, ArrowUpDown, ChevronUp, ChevronDown, Medal } from 'lucide-react';
 
 interface StandingsTableProps {
   data: LeagueData;
 }
 
-type SortField = 'legacyScore' | 'wins' | 'winPct' | 'pf' | 'titles' | 'avgRank' | 'playoffPct';
+type SortField = 'legacyScore' | 'wins' | 'winPct' | 'pf' | 'titles' | 'playoffPct';
 
 export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
-  const [sortField, setSortField] = useState<SortField>('legacyScore');
+  const [sortField, setSortField] = useState<SortField>('titles');
   const [sortDesc, setSortDesc] = useState(true);
 
   const allTimeStats = useMemo(() => {
@@ -54,11 +54,9 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
     return Object.entries(stats)
       .map(([id, stat]) => {
         const winPctVal = stat.wins / (stat.wins + stat.losses || 1);
-        const avgRankVal = stat.ranks.reduce((a, b) => a + b, 0) / (stat.seasons || 1);
         const playoffPctVal = stat.playoffApps / (stat.seasons || 1);
         
-        // Arbitrary Legacy Score Formula: (Titles * 10) + (Playoffs * 2) + (Wins * 0.5)
-        // Normalized roughly to 0-100 range
+        // Legacy Score: (Titles * 10) + (Playoffs * 2) + (Wins * 0.5)
         const legacyScore = (stat.titles * 10) + (stat.playoffApps * 3) + (stat.wins * 0.5);
 
         return {
@@ -66,15 +64,18 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
           manager: data.managers.find(m => m.id === id)!,
           winPct: winPctVal,
           winPctDisplay: winPctVal.toFixed(3),
-          avgRank: avgRankVal,
           playoffPct: playoffPctVal,
           legacyScore
         };
       })
-      .filter(s => s.seasons > 0) // Filter out managers with no history if any
+      .filter(s => s.seasons > 0)
       .sort((a, b) => {
         const valA = a[sortField];
         const valB = b[sortField];
+        if (valA === valB) {
+            // Tie-break with legacy score
+            return b.legacyScore - a.legacyScore;
+        }
         return sortDesc ? (valB > valA ? 1 : -1) : (valA > valB ? 1 : -1);
       });
   }, [data, sortField, sortDesc]);
@@ -84,7 +85,7 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
       setSortDesc(!sortDesc);
     } else {
       setSortField(field);
-      setSortDesc(field !== 'avgRank'); // Default asc for rank, desc for others
+      setSortDesc(true); // Default desc for all stats
     }
   };
 
@@ -99,36 +100,29 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
         <div>
           <h3 className="text-xl font-bold text-white flex items-center gap-2">
             <Medal className="w-5 h-5 text-indigo-400" />
-            Career Stats
+            Hall of Fame
           </h3>
           <p className="text-slate-400 text-xs mt-1">
-            Ranking based on Legacy Score (Titles x 10 + Playoffs x 3 + Wins x 0.5)
+            Ordered by Championships Won
           </p>
         </div>
-        <span className="text-xs font-mono text-slate-400 bg-slate-900 px-2 py-1 rounded">2011 - Present</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse">
           <thead className="bg-slate-900 text-slate-400 text-xs uppercase tracking-wider font-semibold">
             <tr>
               <th className="px-6 py-4">Manager</th>
-              <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('legacyScore')}>
-                Legacy <SortIcon field="legacyScore" />
-              </th>
               <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('titles')}>
                 Titles <SortIcon field="titles" />
+              </th>
+              <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('legacyScore')}>
+                Legacy <SortIcon field="legacyScore" />
               </th>
               <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('wins')}>
                 Wins <SortIcon field="wins" />
               </th>
                <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('winPct')}>
                 Win % <SortIcon field="winPct" />
-              </th>
-              <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('playoffPct')}>
-                Playoff % <SortIcon field="playoffPct" />
-              </th>
-               <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('avgRank')}>
-                Avg Rank <SortIcon field="avgRank" />
               </th>
               <th className="px-6 py-4 text-right cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('pf')}>
                 Total Points <SortIcon field="pf" />
@@ -156,16 +150,16 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
                   </div>
                 </td>
                 <td className="px-4 py-4 text-center">
-                  <div className="inline-block px-2 py-1 rounded bg-indigo-500/10 text-indigo-300 font-bold text-sm">
-                    {row.legacyScore.toFixed(1)}
-                  </div>
-                </td>
-                <td className="px-4 py-4 text-center">
                   {row.titles > 0 ? (
-                    <span className="text-yellow-400 font-bold flex items-center justify-center gap-1">
-                      <Trophy className="w-3 h-3" /> {row.titles}
+                    <span className="text-yellow-400 font-bold flex items-center justify-center gap-1 text-base">
+                      <Trophy className="w-4 h-4" /> {row.titles}
                     </span>
                   ) : <span className="text-slate-700">-</span>}
+                </td>
+                <td className="px-4 py-4 text-center">
+                  <div className="inline-block px-2 py-1 rounded bg-indigo-500/10 text-indigo-300 font-bold text-sm">
+                    {row.legacyScore.toFixed(0)}
+                  </div>
                 </td>
                 <td className="px-4 py-4 text-center text-slate-300 text-sm">
                   {row.wins}
@@ -186,13 +180,7 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
                     </div>
                   </div>
                 </td>
-                <td className="px-4 py-4 text-center text-sm text-slate-300">
-                  {(row.playoffPct * 100).toFixed(0)}%
-                </td>
-                 <td className="px-4 py-4 text-center text-sm text-slate-300">
-                  #{row.avgRank.toFixed(1)}
-                </td>
-                <td className="px-6 py-4 text-right font-mono text-slate-300 text-sm">
+                <td className="px-6 py-4 text-right font-mono text-emerald-400 font-bold text-sm">
                   {row.pf.toLocaleString()}
                 </td>
               </tr>
