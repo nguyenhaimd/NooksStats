@@ -42,6 +42,21 @@ export interface Transaction {
   }[];
 }
 
+export interface GameSide {
+  managerId: string;
+  teamKey: string;
+  points: number;
+}
+
+export interface Game {
+  week: number;
+  isPlayoffs: boolean;
+  teamA: GameSide;
+  teamB: GameSide;
+  winnerTeamKey?: string;
+  isTie: boolean;
+}
+
 export interface Season {
   year: number;
   key: string;
@@ -49,6 +64,7 @@ export interface Season {
   standings: ManagerSeason[];
   draft?: DraftPick[];
   transactions?: Transaction[];
+  games?: Game[]; // Full season schedule/results
 }
 
 export interface LeagueData {

@@ -9,6 +9,7 @@ import { LeagueOracle } from './components/LeagueOracle';
 import { LeagueRecords } from './components/LeagueRecords';
 import { Versus } from './components/Versus';
 import { DraftHistory } from './components/DraftHistory';
+import { AdvancedStats } from './components/AdvancedStats';
 
 // --- SUB COMPONENTS ---
 
@@ -555,6 +556,7 @@ const App: React.FC = () => {
             {view === ViewState.DRAFT && <DraftHistory data={leagueData} token={yahooToken} />}
             {view === ViewState.HISTORY && (
               <div className="space-y-8 animate-in fade-in duration-300">
+                <AdvancedStats data={leagueData} />
                 <HistoryChart data={leagueData} />
                 <h3 className="text-xl font-bold text-white px-1">Season History</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
