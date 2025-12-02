@@ -15,6 +15,7 @@ import { AdvancedStats } from './components/AdvancedStats';
 
 interface SyncModalProps {
   loading: boolean;
+  status: string | null;
   error: string | null;
   syncStep: 'TOKEN' | 'SELECT' | 'FETCHING';
   yahooToken: string;
@@ -29,6 +30,7 @@ interface SyncModalProps {
 
 const SyncModal: React.FC<SyncModalProps> = ({
   loading,
+  status,
   error,
   syncStep,
   yahooToken,
@@ -119,8 +121,9 @@ const SyncModal: React.FC<SyncModalProps> = ({
            {syncStep === 'FETCHING' && (
              <div className="text-center py-12">
                <Loader2 className="w-12 h-12 text-emerald-500 animate-spin mx-auto mb-4" />
-               <h3 className="text-xl font-bold text-white">Syncing Data...</h3>
-               <p className="text-slate-500">Fetching league history and updating database.</p>
+               <h3 className="text-xl font-bold text-white mb-2">Syncing Data...</h3>
+               <p className="text-slate-400 text-sm">{status || "Connecting to Yahoo Fantasy API..."}</p>
+               <p className="text-xs text-slate-600 mt-4">This may take a minute as we fetch historical matchups safely.</p>
              </div>
            )}
         </div>
@@ -168,7 +171,6 @@ const App: React.FC = () => {
     if (saved) return JSON.parse(saved);
 
     // Priority 2: Check Environment Variables (Vercel/Build time)
-    // Note: We use import.meta.env for Vite
     if (import.meta.env.VITE_FIREBASE_API_KEY) {
       return {
         apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -193,6 +195,7 @@ const App: React.FC = () => {
   const [isConfiguring, setIsConfiguring] = useState(!firebaseConfig);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // 4. Sync State
@@ -271,6 +274,7 @@ const App: React.FC = () => {
     setShowSyncModal(true);
     setSyncStep('TOKEN');
     setError(null);
+    setSyncStatus(null);
   };
 
   const handleTokenSubmit = async () => {
@@ -310,13 +314,18 @@ const App: React.FC = () => {
     if (leaguesToSync.length === 0) return;
     setSyncStep('FETCHING');
     setLoading(true);
+    setSyncStatus("Initializing...");
+    
     try {
-      // Fetch Data
-      const newData = await fetchYahooData(yahooToken, leaguesToSync);
+      // Fetch Data with Progress Callback
+      const newData = await fetchYahooData(yahooToken, leaguesToSync, (status) => {
+          setSyncStatus(status);
+      });
       
       const primaryKey = leaguesToSync[0]; 
       const primaryName = discoveryLeagues.find(l => l.key === primaryKey)?.name || "Unknown League";
 
+      setSyncStatus("Saving to Database...");
       await saveLeagueToFirebase(primaryKey, primaryName, newData);
       
       // Refresh UI
@@ -330,6 +339,7 @@ const App: React.FC = () => {
       setSyncStep('SELECT'); // Go back
     } finally {
       setLoading(false);
+      setSyncStatus(null);
     }
   };
 
@@ -467,6 +477,7 @@ const App: React.FC = () => {
          {showSyncModal && (
            <SyncModal 
              loading={loading}
+             status={syncStatus}
              error={error}
              syncStep={syncStep}
              yahooToken={yahooToken}
@@ -660,6 +671,7 @@ const App: React.FC = () => {
       {showSyncModal && (
         <SyncModal 
           loading={loading}
+          status={syncStatus}
           error={error}
           syncStep={syncStep}
           yahooToken={yahooToken}
