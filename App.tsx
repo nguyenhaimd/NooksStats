@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw, ListFilter, CheckSquare, Database, RefreshCw, PlusCircle, ArrowRight } from 'lucide-react';
-import { fetchYahooData, fetchUserLeagues } from './services/yahooService';
+import React, { useState, useEffect, useRef } from 'react';
+import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw, ListFilter, CheckSquare, Database, RefreshCw, PlusCircle, ArrowRight, Terminal } from 'lucide-react';
+import { fetchYahooData, fetchUserLeagues, LogType } from './services/yahooService';
 import { initFirebase, saveLeagueToFirebase, fetchLeagueFromFirebase, fetchLeagueList, FirebaseConfig } from './services/firebaseService';
 import { LeagueData, ViewState, LeagueSummary } from './types';
 import { HistoryChart } from './components/HistoryChart';
@@ -13,9 +13,15 @@ import { AdvancedStats } from './components/AdvancedStats';
 
 // --- SUB COMPONENTS ---
 
+interface LogEntry {
+  type: LogType;
+  message: string;
+  timestamp: number;
+}
+
 interface SyncModalProps {
   loading: boolean;
-  status: string | null;
+  logs: LogEntry[];
   error: string | null;
   syncStep: 'TOKEN' | 'SELECT' | 'FETCHING';
   yahooToken: string;
@@ -30,7 +36,7 @@ interface SyncModalProps {
 
 const SyncModal: React.FC<SyncModalProps> = ({
   loading,
-  status,
+  logs,
   error,
   syncStep,
   yahooToken,
@@ -42,6 +48,14 @@ const SyncModal: React.FC<SyncModalProps> = ({
   executeSync,
   onClose
 }) => {
+  const logContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [logs]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
       <div className="bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -119,11 +133,39 @@ const SyncModal: React.FC<SyncModalProps> = ({
            )}
 
            {syncStep === 'FETCHING' && (
-             <div className="text-center py-12">
-               <Loader2 className="w-12 h-12 text-emerald-500 animate-spin mx-auto mb-4" />
-               <h3 className="text-xl font-bold text-white mb-2">Syncing Data...</h3>
-               <p className="text-slate-400 text-sm">{status || "Connecting to Yahoo Fantasy API..."}</p>
-               <p className="text-xs text-slate-600 mt-4">This may take a minute as we fetch historical matchups safely.</p>
+             <div className="space-y-4">
+               <div className="flex items-center justify-between">
+                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                   <Terminal className="w-4 h-4 text-slate-400" />
+                   Sync Log
+                 </h3>
+                 <span className="text-xs text-slate-500 animate-pulse">Processing...</span>
+               </div>
+               
+               <div 
+                 ref={logContainerRef}
+                 className="bg-black/50 border border-slate-700 rounded-xl p-4 h-64 overflow-y-auto font-mono text-xs space-y-1 custom-scrollbar"
+               >
+                 {logs.length === 0 && <span className="text-slate-600">Waiting for logs...</span>}
+                 {logs.map((log, idx) => (
+                   <div key={idx} className="flex gap-2">
+                     <span className="text-slate-600 shrink-0">
+                       {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' })}
+                     </span>
+                     <span className={`
+                       ${log.type === 'INFO' ? 'text-blue-300' : ''}
+                       ${log.type === 'SUCCESS' ? 'text-emerald-400 font-bold' : ''}
+                       ${log.type === 'WARN' ? 'text-yellow-400' : ''}
+                       ${log.type === 'ERROR' ? 'text-red-400 font-bold' : ''}
+                     `}>
+                       {log.message}
+                     </span>
+                   </div>
+                 ))}
+               </div>
+               <p className="text-xs text-slate-500 text-center pt-2">
+                 Please wait while we fetch historical data. This may take a few minutes.
+               </p>
              </div>
            )}
         </div>
@@ -195,7 +237,7 @@ const App: React.FC = () => {
   const [isConfiguring, setIsConfiguring] = useState(!firebaseConfig);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [syncLogs, setSyncLogs] = useState<LogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // 4. Sync State
@@ -274,7 +316,11 @@ const App: React.FC = () => {
     setShowSyncModal(true);
     setSyncStep('TOKEN');
     setError(null);
-    setSyncStatus(null);
+    setSyncLogs([]);
+  };
+
+  const addLog = (type: LogType, message: string) => {
+    setSyncLogs(prev => [...prev, { type, message, timestamp: Date.now() }]);
   };
 
   const handleTokenSubmit = async () => {
@@ -314,32 +360,36 @@ const App: React.FC = () => {
     if (leaguesToSync.length === 0) return;
     setSyncStep('FETCHING');
     setLoading(true);
-    setSyncStatus("Initializing...");
+    setSyncLogs([]);
+    addLog('INFO', "Initializing sync process...");
     
     try {
-      // Fetch Data with Progress Callback
-      const newData = await fetchYahooData(yahooToken, leaguesToSync, (status) => {
-          setSyncStatus(status);
-      });
+      // Fetch Data with Logger
+      const newData = await fetchYahooData(yahooToken, leaguesToSync, addLog);
       
       const primaryKey = leaguesToSync[0]; 
       const primaryName = discoveryLeagues.find(l => l.key === primaryKey)?.name || "Unknown League";
 
-      setSyncStatus("Saving to Database...");
+      addLog('INFO', "Saving data to Firebase...");
       await saveLeagueToFirebase(primaryKey, primaryName, newData);
+      addLog('SUCCESS', "Sync Complete!");
       
       // Refresh UI
       await loadLibrary();
       await loadLeague(primaryKey);
       
-      setShowSyncModal(false);
-      setYahooToken(''); // Clear token for security
+      // Short delay to let user see success
+      setTimeout(() => {
+          setShowSyncModal(false);
+          setYahooToken(''); 
+      }, 2000);
+
     } catch (e: any) {
       setError("Sync Failed: " + e.message);
-      setSyncStep('SELECT'); // Go back
+      addLog('ERROR', e.message);
+      // setSyncStep('SELECT'); // Keep logs visible instead of going back
     } finally {
       setLoading(false);
-      setSyncStatus(null);
     }
   };
 
@@ -477,7 +527,7 @@ const App: React.FC = () => {
          {showSyncModal && (
            <SyncModal 
              loading={loading}
-             status={syncStatus}
+             logs={syncLogs}
              error={error}
              syncStep={syncStep}
              yahooToken={yahooToken}
@@ -671,7 +721,7 @@ const App: React.FC = () => {
       {showSyncModal && (
         <SyncModal 
           loading={loading}
-          status={syncStatus}
+          logs={syncLogs}
           error={error}
           syncStep={syncStep}
           yahooToken={yahooToken}

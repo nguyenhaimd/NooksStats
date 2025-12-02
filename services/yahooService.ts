@@ -22,6 +22,9 @@ const NFL_GAME_KEYS = [
   257  // 2011
 ];
 
+export type LogType = 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
+export type Logger = (type: LogType, message: string) => void;
+
 // Utility to pause execution
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -103,12 +106,17 @@ export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSumma
 export const fetchYahooData = async (
   accessToken: string, 
   leagueKeys: string[],
-  onProgress?: (status: string) => void
+  log?: Logger
 ): Promise<LeagueData> => {
   if (!leagueKeys || leagueKeys.length === 0) throw new Error("No leagues selected.");
+  
+  const safeLog = (type: LogType, msg: string) => {
+      console.log(`[${type}] ${msg}`);
+      if (log) log(type, msg);
+  };
 
   // Batch leagues to initial metadata fetch
-  const BATCH_SIZE = 10; // Reduce batch size to be safer
+  const BATCH_SIZE = 10; 
   const chunks = [];
   for (let i = 0; i < leagueKeys.length; i += BATCH_SIZE) {
     chunks.push(leagueKeys.slice(i, i + BATCH_SIZE));
@@ -121,36 +129,44 @@ export const fetchYahooData = async (
      const keysString = chunk.join(',');
      const targetUrl = `${BASE_URL}/leagues;league_keys=${keysString};out=standings,draftresults,transactions?format=json`;
      
-     if (onProgress) onProgress(`Fetching metadata for ${chunk.length} leagues...`);
+     safeLog('INFO', `Fetching metadata for ${chunk.length} league(s)...`);
 
      const response = await fetchWithRetry(targetUrl, accessToken);
 
      if (!response.ok) {
         if (response.status === 401) throw new Error("Unauthorized: Token expired");
-        console.warn(`Batch failed for keys: ${keysString}`);
+        safeLog('ERROR', `Batch metadata fetch failed for keys: ${keysString}`);
         continue;
      }
 
      const json = await response.json();
      const { managers, seasons } = await transformYahooData(json, accessToken, allManagersMap); 
      
+     safeLog('SUCCESS', `Parsed ${seasons.length} seasons of metadata.`);
+
      // Fetch Schedule/Matchups sequentially for each season to avoid timeout/rate-limit
      for (const season of seasons) {
         try {
-            if (onProgress) onProgress(`Fetching Matchups: ${season.year}...`);
+            safeLog('INFO', `Starting matchup sync for ${season.year}...`);
             
             // Build a map of TeamKey -> ManagerID for this season
             const teamMap = new Map<string, string>();
             season.standings.forEach(s => teamMap.set(s.teamKey, s.managerId));
 
             // Fetch games week by week
-            season.games = await fetchSeasonGames(season.key, accessToken, teamMap, season.year, onProgress);
+            season.games = await fetchSeasonGames(season.key, accessToken, teamMap, season.year, safeLog);
+            
+            if (season.games.length > 0) {
+                safeLog('SUCCESS', `Loaded ${season.games.length} games for ${season.year}.`);
+            } else {
+                safeLog('WARN', `No games found for ${season.year}.`);
+            }
             
             // Polite delay between seasons
             await wait(1000); 
 
-        } catch (e) {
-            console.warn(`Failed to fetch matchups for season ${season.year}`, e);
+        } catch (e: any) {
+            safeLog('ERROR', `Failed to fetch matchups for season ${season.year}: ${e.message}`);
             season.games = [];
         }
      }
@@ -169,48 +185,66 @@ const fetchSeasonGames = async (
     accessToken: string, 
     teamMap: Map<string, string>, 
     year: number,
-    onProgress?: (status: string) => void
+    log: Logger
 ): Promise<Game[]> => {
     const games: Game[] = [];
     
-    // Fetch weeks 1 through 18 sequentially.
-    // NOTE: Even if a season was shorter (e.g., 16 weeks), fetching 17/18 returns empty matchups which is handled safely.
-    // This is "meticulous" mode.
-    for (let week = 1; week <= 18; week++) {
+    // Fetch weeks 1 through 17/18 sequentially.
+    const MAX_WEEKS = 18;
+    
+    for (let week = 1; week <= MAX_WEEKS; week++) {
         const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${week}?format=json`;
         
-        if (onProgress) onProgress(`Fetching ${year} Week ${week}...`);
+        log('INFO', `Fetching ${year} Week ${week} scoreboard...`);
 
         try {
             // High retry count, longer backoff
-            const response = await fetchWithRetry(url, accessToken, 5, 2000);
+            const response = await fetchWithRetry(url, accessToken, 3, 1500);
             
             if (!response.ok) {
-                console.warn(`Skipping Week ${week} due to API Error ${response.status}`);
+                log('WARN', `Skipping Week ${week} (API Status: ${response.status})`);
                 continue;
             }
 
             const json = await response.json();
             const leagueNode = json?.fantasy_content?.leagues?.[0]?.league;
-            if (!leagueNode) continue;
+            if (!leagueNode) {
+                log('WARN', `Week ${week}: Unexpected JSON structure (no league node).`);
+                continue;
+            }
 
-            const scoreboard = leagueNode.find((x:any) => x.scoreboard)?.scoreboard;
-            if (!scoreboard) continue;
+            // Yahoo puts scoreboard in an array usually at index 1 or found by key
+            // The structure is usually [ {metadata}, {scoreboard: ...} ]
+            let scoreboard = leagueNode.find((x:any) => x.scoreboard)?.scoreboard;
+            
+            if (!scoreboard) {
+                 // Fallback check
+                 if (leagueNode[1]?.scoreboard) scoreboard = leagueNode[1].scoreboard;
+            }
+
+            if (!scoreboard) {
+                log('WARN', `Week ${week}: No scoreboard data found.`);
+                continue;
+            }
 
             const matchupsNode = scoreboard[0]?.matchups;
             
             // Check if matchups exist and have a count
             if (!matchupsNode || matchupsNode === '0' || (typeof matchupsNode === 'object' && matchupsNode.count === '0')) {
-                // No matchups this week (e.g., week 18 in a 16 week season)
+                // No matchups this week (e.g., season over)
+                // log('INFO', `Week ${week}: No matchups scheduled.`);
                 continue;
             }
 
             const count = parseInt(matchupsNode.count);
+            let gamesFound = 0;
+
             for(let i=0; i<count; i++) {
                 const matchupWrapper = matchupsNode[i + ""]?.matchup;
                 if (!matchupWrapper) continue;
 
                 // Robustly find metadata
+                // matchupWrapper is usually [ {week: '1', ...}, {teams: ...} ]
                 const meta = matchupWrapper.find((x:any) => x.week) || matchupWrapper[0]; 
                 const teamsWrapper = matchupWrapper.find((x:any) => x.teams)?.teams;
 
@@ -240,15 +274,25 @@ const fetchSeasonGames = async (
                                  teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
                                  teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
                              });
+                             gamesFound++;
+                         } else {
+                             // This is often why data is missing - Manager ID mapping failed
+                             if (!mgr0) log('WARN', `Week ${week}: Could not map Team ${t0Key} to a manager.`);
+                             if (!mgr1) log('WARN', `Week ${week}: Could not map Team ${t1Key} to a manager.`);
                          }
                      }
                 }
             }
+            
+            if (gamesFound > 0) {
+               // log('INFO', `Week ${week}: Parsed ${gamesFound} games.`);
+            }
+            
             // Polite delay between every single week request
-            await wait(750);
+            await wait(800);
 
-        } catch (e) {
-            console.warn(`Error fetching games for ${year} week ${week}`, e);
+        } catch (e: any) {
+            log('ERROR', `Error fetching games for ${year} week ${week}: ${e.message}`);
         }
     }
 
