@@ -151,7 +151,11 @@ const App: React.FC = () => {
       
       setSyncStep('SELECT');
     } catch (e: any) {
-      setError("Failed to validate token: " + e.message);
+      let msg = e.message;
+      if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
+         msg = "Network Blocked. Please disable AdBlockers (e.g., Privacy Badger) for this site or try a different browser.";
+      }
+      setError("Failed to validate token: " + msg);
     } finally {
       setLoading(false);
     }

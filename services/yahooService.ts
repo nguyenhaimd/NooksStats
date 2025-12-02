@@ -1,6 +1,6 @@
 import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction, LeagueSummary } from '../types';
 
-const PROXY_URL = 'https://api.allorigins.win/raw?url=';
+const PROXY_URL = 'https://corsproxy.io/?';
 const BASE_URL = 'https://fantasysports.yahooapis.com/fantasy/v2';
 
 // Game IDs for NFL Fantasy Football from 2011 to 2025
@@ -28,12 +28,15 @@ export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSumma
   const keysString = NFL_GAME_KEYS.join(',');
   const url = `${BASE_URL}/users;use_login=1/games;game_keys=${keysString}/leagues?format=json`;
 
-  // Use allorigins for GET requests to avoid 429s on corsproxy.io for data
+  // Use corsproxy.io to ensure Authorization headers are forwarded
   const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
     headers: { 'Authorization': `Bearer ${accessToken}` }
   });
 
-  if (!response.ok) throw new Error("Failed to fetch user leagues");
+  if (!response.ok) {
+     const text = await response.text();
+     throw new Error(`Yahoo API Error (${response.status}): ${text.substring(0, 100)}`);
+  }
 
   const json = await response.json();
   const leagues: LeagueSummary[] = [];
@@ -97,7 +100,7 @@ export const fetchYahooData = async (accessToken: string, leagueKeys: string[]):
      });
 
      if (!response.ok) {
-        if (response.status === 401) throw new Error("Unauthorized");
+        if (response.status === 401) throw new Error("Unauthorized: Token expired");
         console.warn(`Batch failed for keys: ${keysString}`);
         continue;
      }
