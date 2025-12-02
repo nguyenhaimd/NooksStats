@@ -55,6 +55,65 @@ const fetchWithRetry = async (url: string, accessToken: string, retries = 5, bac
   }
 };
 
+// --- HELPER FUNCTIONS FOR ROBUST PARSING ---
+
+// Safely extracts a property from a node that could be an Object OR an Array of Objects
+const safeExtract = (node: any, key: string): any => {
+  if (!node) return undefined;
+  
+  // If array, look for the item containing the key
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      if (item && typeof item === 'object' && key in item) {
+        return item[key];
+      }
+    }
+    return undefined;
+  }
+  
+  // If object, just return the key
+  if (typeof node === 'object') {
+    return node[key];
+  }
+
+  return undefined;
+};
+
+// Extract Team Key safely from weird Yahoo "Team" structure
+const getTeamKey = (teamData: any): string | null => {
+  if (!teamData) return null;
+
+  // teamData is usually [ [ {team_key: '...'}, ...meta ], {team_points...} ]
+  if (Array.isArray(teamData)) {
+    const metaList = teamData[0];
+    if (Array.isArray(metaList)) {
+       const keyObj = metaList.find((x: any) => x && typeof x === 'object' && x.team_key);
+       return keyObj ? keyObj.team_key : null;
+    }
+    // Fallback if metaList is just an object (rare)
+    if (metaList && typeof metaList === 'object' && 'team_key' in metaList) {
+        return (metaList as any).team_key;
+    }
+  } 
+  else if (typeof teamData === 'object' && teamData.team_key) {
+      return teamData.team_key;
+  }
+  return null;
+};
+
+// Extract Points safely
+const getTeamPoints = (teamData: any): number => {
+    if (!teamData) return 0;
+    
+    const pointsObj = safeExtract(teamData, 'team_points');
+    if (pointsObj && pointsObj.total) {
+        return parseFloat(pointsObj.total);
+    }
+    return 0;
+}
+
+// ---------------------------------------------
+
 export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSummary[]> => {
   // Fetch leagues across all known NFL game keys to build a history
   const keysString = NFL_GAME_KEYS.join(',');
@@ -163,7 +222,7 @@ export const fetchYahooData = async (
             }
             
             // Polite delay between seasons
-            await wait(1000); 
+            await wait(2000); 
 
         } catch (e: any) {
             safeLog('ERROR', `Failed to fetch matchups for season ${season.year}: ${e.message}`);
@@ -198,8 +257,8 @@ const fetchSeasonGames = async (
         log('INFO', `Fetching ${year} Week ${week} scoreboard...`);
 
         try {
-            // High retry count, longer backoff
-            const response = await fetchWithRetry(url, accessToken, 3, 1500);
+            // High retry count, generous backoff
+            const response = await fetchWithRetry(url, accessToken, 5, 2000);
             
             if (!response.ok) {
                 log('WARN', `Skipping Week ${week} (API Status: ${response.status})`);
@@ -208,96 +267,94 @@ const fetchSeasonGames = async (
 
             const json = await response.json();
             
-            // Safely traverse to league node
+            // ROBUST TRAVERSAL
+            // 1. Find League Node
             const fc = json?.fantasy_content;
-            // Yahoo usually puts the league at key "0" or just one element in leagues
-            const leagueWrapper = fc?.leagues?.[0] || fc?.leagues?.['0'];
-            const leagueNode = leagueWrapper?.league;
+            const leaguesNode = safeExtract(fc, 'leagues');
+            const leagueNode = safeExtract(leaguesNode, 'league');
 
             if (!leagueNode) {
-                // If it's a structural issue, log but don't crash
-                // log('WARN', `Week ${week}: Unexpected JSON structure (no league node).`);
+                // log('WARN', `Week ${week}: No league data found.`);
                 continue;
             }
 
-            // ROBUST EXTRACTION: Handle both Array and Object responses
-            let scoreboard;
-            if (Array.isArray(leagueNode)) {
-                // Common Case: [ {metadata}, {scoreboard} ]
-                scoreboard = leagueNode.find((x: any) => x.scoreboard)?.scoreboard;
-            } else if (typeof leagueNode === 'object') {
-                // Edge Case: { league_key:..., scoreboard: { ... } }
-                scoreboard = leagueNode.scoreboard;
-            }
-
+            // 2. Find Scoreboard
+            const scoreboard = safeExtract(leagueNode, 'scoreboard');
             if (!scoreboard) {
-                // Sometimes the season is over or week hasn't happened
-                // log('WARN', `Week ${week}: No scoreboard data found.`);
+                // log('WARN', `Week ${week}: No scoreboard found.`);
                 continue;
             }
 
-            const matchupsNode = scoreboard[0]?.matchups;
-            
-            // Check if matchups exist and have a count
-            if (!matchupsNode || matchupsNode === '0' || (typeof matchupsNode === 'object' && matchupsNode.count === '0')) {
-                continue;
+            // 3. Find Matchups
+            const matchupsNode = safeExtract(scoreboard, 'matchups');
+            if (!matchupsNode) continue;
+
+            // 4. Iterate Matchups
+            // Matchups can be an array OR an object with {0:..., 1:..., count: "N"}
+            let count = 0;
+            let getMatchupByIndex = (i: number) => null;
+
+            if (Array.isArray(matchupsNode)) {
+                count = matchupsNode.length;
+                getMatchupByIndex = (i) => matchupsNode[i]?.matchup;
+            } else if (matchupsNode.count) {
+                count = parseInt(matchupsNode.count);
+                getMatchupByIndex = (i) => {
+                    const wrapper = matchupsNode[String(i)];
+                    return wrapper ? wrapper.matchup : null;
+                };
             }
 
-            const count = parseInt(matchupsNode.count);
+            if (count === 0) continue;
+
             let gamesFound = 0;
 
             for(let i=0; i<count; i++) {
-                const matchupWrapper = matchupsNode[i + ""]?.matchup;
-                if (!matchupWrapper) continue;
+                const matchupData = getMatchupByIndex(i);
+                if (!matchupData) continue;
 
-                // Matchup wrapper is usually an array: [ {week, ...}, {teams} ]
-                // Or sometimes an object if single item (rare for matchups but possible)
-                let meta, teamsWrapper;
+                // 5. Extract Meta (week, playoffs, etc)
+                // Matchup data is usually [ {week:..}, {teams:..} ]
+                // Use safeExtract to find the object containing 'week'
+                const weekStr = safeExtract(matchupData, 'week');
+                const isPlayoffsStr = safeExtract(matchupData, 'is_playoffs');
+                const winnerKey = safeExtract(matchupData, 'winner_team_key');
+                const isTiedStr = safeExtract(matchupData, 'is_tied');
 
-                if (Array.isArray(matchupWrapper)) {
-                    meta = matchupWrapper.find((x:any) => x.week) || matchupWrapper[0];
-                    teamsWrapper = matchupWrapper.find((x:any) => x.teams)?.teams;
-                } else {
-                    meta = matchupWrapper; // risky assumption, but fallback
-                    teamsWrapper = matchupWrapper.teams;
-                }
+                // 6. Extract Teams
+                const teamsWrapper = safeExtract(matchupData, 'teams');
+                if (!teamsWrapper) continue;
 
-                if (teamsWrapper) {
-                     const team0Data = teamsWrapper["0"]?.team;
-                     const team1Data = teamsWrapper["1"]?.team;
+                // Teams wrapper is usually {0: {team:..}, 1: {team:..}, count: "2"}
+                const team0Wrapper = teamsWrapper["0"]?.team;
+                const team1Wrapper = teamsWrapper["1"]?.team;
+
+                if (team0Wrapper && team1Wrapper) {
+                     const t0Key = getTeamKey(team0Wrapper);
+                     const t1Key = getTeamKey(team1Wrapper);
                      
-                     // Need both teams for a H2H game (skip Byes)
-                     if (team0Data && team1Data) {
-                         // Safely extract team keys and points
-                         // teamData is usually [ [ {team_key...}, ...], {team_points...}, ... ]
-                         const t0Key = team0Data[0]?.find((x:any) => x.team_key)?.team_key;
-                         const t0PtsObj = team0Data.find((x:any) => x.team_points)?.team_points;
-                         const t0Pts = parseFloat(t0PtsObj?.total || 0);
+                     const t0Pts = getTeamPoints(team0Wrapper);
+                     const t1Pts = getTeamPoints(team1Wrapper);
+                     
+                     const mgr0 = t0Key ? teamMap.get(t0Key) : null;
+                     const mgr1 = t1Key ? teamMap.get(t1Key) : null;
 
-                         const t1Key = team1Data[0]?.find((x:any) => x.team_key)?.team_key;
-                         const t1PtsObj = team1Data.find((x:any) => x.team_points)?.team_points;
-                         const t1Pts = parseFloat(t1PtsObj?.total || 0);
-                         
-                         const mgr0 = teamMap.get(t0Key);
-                         const mgr1 = teamMap.get(t1Key);
-
-                         if (mgr0 && mgr1) {
-                             games.push({
-                                 week: parseInt(meta?.week || week),
-                                 isPlayoffs: meta?.is_playoffs === '1',
-                                 winnerTeamKey: meta?.winner_team_key,
-                                 isTie: meta?.is_tied === '1',
-                                 teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
-                                 teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
-                             });
-                             gamesFound++;
-                         }
+                     if (mgr0 && mgr1 && t0Key && t1Key) {
+                         games.push({
+                             week: weekStr ? parseInt(weekStr) : week,
+                             isPlayoffs: isPlayoffsStr === '1',
+                             winnerTeamKey: winnerKey,
+                             isTie: isTiedStr === '1',
+                             teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
+                             teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
+                         });
+                         gamesFound++;
                      }
                 }
             }
             
-            // Polite delay to avoid rate limits
-            await wait(1100);
+            // Polite delay to avoid rate limits (Critical for deep history syncs)
+            await wait(1500);
 
         } catch (e: any) {
             log('ERROR', `Error fetching games for ${year} week ${week}: ${e.message}`);

@@ -48,12 +48,10 @@ const SyncModal: React.FC<SyncModalProps> = ({
   executeSync,
   onClose
 }) => {
-  const logContainerRef = useRef<HTMLDivElement>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (logContainerRef.current) {
-      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-    }
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
   return (
@@ -143,7 +141,6 @@ const SyncModal: React.FC<SyncModalProps> = ({
                </div>
                
                <div 
-                 ref={logContainerRef}
                  className="bg-black/50 border border-slate-700 rounded-xl p-4 flex-1 min-h-[300px] overflow-y-auto font-mono text-xs space-y-1 custom-scrollbar"
                >
                  {logs.length === 0 && <span className="text-slate-600">Waiting for logs...</span>}
@@ -162,6 +159,7 @@ const SyncModal: React.FC<SyncModalProps> = ({
                      </span>
                    </div>
                  ))}
+                 <div ref={logsEndRef} />
                </div>
                <p className="text-xs text-slate-500 text-center pt-2 shrink-0">
                  Please wait while we fetch historical data. This may take a few minutes.
