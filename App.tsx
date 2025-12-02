@@ -58,9 +58,9 @@ const SyncModal: React.FC<SyncModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[80vh] md:h-auto md:max-h-[90vh]">
         
-        <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+        <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950 shrink-0">
            <h2 className="text-xl font-bold text-white flex items-center gap-2">
              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
              Sync with Yahoo
@@ -133,8 +133,8 @@ const SyncModal: React.FC<SyncModalProps> = ({
            )}
 
            {syncStep === 'FETCHING' && (
-             <div className="space-y-4">
-               <div className="flex items-center justify-between">
+             <div className="space-y-4 h-full flex flex-col">
+               <div className="flex items-center justify-between shrink-0">
                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
                    <Terminal className="w-4 h-4 text-slate-400" />
                    Sync Log
@@ -144,7 +144,7 @@ const SyncModal: React.FC<SyncModalProps> = ({
                
                <div 
                  ref={logContainerRef}
-                 className="bg-black/50 border border-slate-700 rounded-xl p-4 h-64 overflow-y-auto font-mono text-xs space-y-1 custom-scrollbar"
+                 className="bg-black/50 border border-slate-700 rounded-xl p-4 flex-1 min-h-[300px] overflow-y-auto font-mono text-xs space-y-1 custom-scrollbar"
                >
                  {logs.length === 0 && <span className="text-slate-600">Waiting for logs...</span>}
                  {logs.map((log, idx) => (
@@ -163,14 +163,14 @@ const SyncModal: React.FC<SyncModalProps> = ({
                    </div>
                  ))}
                </div>
-               <p className="text-xs text-slate-500 text-center pt-2">
+               <p className="text-xs text-slate-500 text-center pt-2 shrink-0">
                  Please wait while we fetch historical data. This may take a few minutes.
                </p>
              </div>
            )}
         </div>
 
-        <div className="p-6 border-t border-slate-800 bg-slate-950 flex justify-end gap-3">
+        <div className="p-6 border-t border-slate-800 bg-slate-950 flex justify-end gap-3 shrink-0">
           {syncStep !== 'FETCHING' && (
              <button onClick={onClose} className="px-4 py-2 text-slate-400 hover:text-white">Cancel</button>
           )}

@@ -189,7 +189,7 @@ const fetchSeasonGames = async (
 ): Promise<Game[]> => {
     const games: Game[] = [];
     
-    // Fetch weeks 1 through 17/18 sequentially.
+    // Fetch weeks 1 through 18 sequentially.
     const MAX_WEEKS = 18;
     
     for (let week = 1; week <= MAX_WEEKS; week++) {
@@ -207,23 +207,32 @@ const fetchSeasonGames = async (
             }
 
             const json = await response.json();
-            const leagueNode = json?.fantasy_content?.leagues?.[0]?.league;
+            
+            // Safely traverse to league node
+            const fc = json?.fantasy_content;
+            // Yahoo usually puts the league at key "0" or just one element in leagues
+            const leagueWrapper = fc?.leagues?.[0] || fc?.leagues?.['0'];
+            const leagueNode = leagueWrapper?.league;
+
             if (!leagueNode) {
-                log('WARN', `Week ${week}: Unexpected JSON structure (no league node).`);
+                // If it's a structural issue, log but don't crash
+                // log('WARN', `Week ${week}: Unexpected JSON structure (no league node).`);
                 continue;
             }
 
-            // Yahoo puts scoreboard in an array usually at index 1 or found by key
-            // The structure is usually [ {metadata}, {scoreboard: ...} ]
-            let scoreboard = leagueNode.find((x:any) => x.scoreboard)?.scoreboard;
-            
-            if (!scoreboard) {
-                 // Fallback check
-                 if (leagueNode[1]?.scoreboard) scoreboard = leagueNode[1].scoreboard;
+            // ROBUST EXTRACTION: Handle both Array and Object responses
+            let scoreboard;
+            if (Array.isArray(leagueNode)) {
+                // Common Case: [ {metadata}, {scoreboard} ]
+                scoreboard = leagueNode.find((x: any) => x.scoreboard)?.scoreboard;
+            } else if (typeof leagueNode === 'object') {
+                // Edge Case: { league_key:..., scoreboard: { ... } }
+                scoreboard = leagueNode.scoreboard;
             }
 
             if (!scoreboard) {
-                log('WARN', `Week ${week}: No scoreboard data found.`);
+                // Sometimes the season is over or week hasn't happened
+                // log('WARN', `Week ${week}: No scoreboard data found.`);
                 continue;
             }
 
@@ -231,8 +240,6 @@ const fetchSeasonGames = async (
             
             // Check if matchups exist and have a count
             if (!matchupsNode || matchupsNode === '0' || (typeof matchupsNode === 'object' && matchupsNode.count === '0')) {
-                // No matchups this week (e.g., season over)
-                // log('INFO', `Week ${week}: No matchups scheduled.`);
                 continue;
             }
 
@@ -243,10 +250,17 @@ const fetchSeasonGames = async (
                 const matchupWrapper = matchupsNode[i + ""]?.matchup;
                 if (!matchupWrapper) continue;
 
-                // Robustly find metadata
-                // matchupWrapper is usually [ {week: '1', ...}, {teams: ...} ]
-                const meta = matchupWrapper.find((x:any) => x.week) || matchupWrapper[0]; 
-                const teamsWrapper = matchupWrapper.find((x:any) => x.teams)?.teams;
+                // Matchup wrapper is usually an array: [ {week, ...}, {teams} ]
+                // Or sometimes an object if single item (rare for matchups but possible)
+                let meta, teamsWrapper;
+
+                if (Array.isArray(matchupWrapper)) {
+                    meta = matchupWrapper.find((x:any) => x.week) || matchupWrapper[0];
+                    teamsWrapper = matchupWrapper.find((x:any) => x.teams)?.teams;
+                } else {
+                    meta = matchupWrapper; // risky assumption, but fallback
+                    teamsWrapper = matchupWrapper.teams;
+                }
 
                 if (teamsWrapper) {
                      const team0Data = teamsWrapper["0"]?.team;
@@ -254,6 +268,8 @@ const fetchSeasonGames = async (
                      
                      // Need both teams for a H2H game (skip Byes)
                      if (team0Data && team1Data) {
+                         // Safely extract team keys and points
+                         // teamData is usually [ [ {team_key...}, ...], {team_points...}, ... ]
                          const t0Key = team0Data[0]?.find((x:any) => x.team_key)?.team_key;
                          const t0PtsObj = team0Data.find((x:any) => x.team_points)?.team_points;
                          const t0Pts = parseFloat(t0PtsObj?.total || 0);
@@ -267,29 +283,21 @@ const fetchSeasonGames = async (
 
                          if (mgr0 && mgr1) {
                              games.push({
-                                 week: parseInt(meta.week),
-                                 isPlayoffs: meta.is_playoffs === '1',
-                                 winnerTeamKey: meta.winner_team_key,
-                                 isTie: meta.is_tied === '1',
+                                 week: parseInt(meta?.week || week),
+                                 isPlayoffs: meta?.is_playoffs === '1',
+                                 winnerTeamKey: meta?.winner_team_key,
+                                 isTie: meta?.is_tied === '1',
                                  teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
                                  teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
                              });
                              gamesFound++;
-                         } else {
-                             // This is often why data is missing - Manager ID mapping failed
-                             if (!mgr0) log('WARN', `Week ${week}: Could not map Team ${t0Key} to a manager.`);
-                             if (!mgr1) log('WARN', `Week ${week}: Could not map Team ${t1Key} to a manager.`);
                          }
                      }
                 }
             }
             
-            if (gamesFound > 0) {
-               // log('INFO', `Week ${week}: Parsed ${gamesFound} games.`);
-            }
-            
-            // Polite delay between every single week request
-            await wait(800);
+            // Polite delay to avoid rate limits
+            await wait(1100);
 
         } catch (e: any) {
             log('ERROR', `Error fetching games for ${year} week ${week}: ${e.message}`);

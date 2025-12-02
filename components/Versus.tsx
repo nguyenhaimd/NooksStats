@@ -234,7 +234,7 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
                         <div className="bg-slate-800/50 border border-yellow-500/20 p-4 rounded-xl text-center">
                             <AlertCircle className="w-8 h-8 text-yellow-500 mx-auto mb-2" />
                             <p className="text-sm text-slate-300">Head-to-Head data not found.</p>
-                            <p className="text-xs text-slate-500 mt-1">Sync your league (top right) to fetch historical game results.</p>
+                            <p className="text-xs text-slate-500 mt-1">Please try running the "Update" sync again. It may take a few minutes to fetch all games.</p>
                         </div>
                      ) : (
                         <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4 animate-in zoom-in duration-300">
