@@ -6,7 +6,7 @@ interface StandingsTableProps {
   data: LeagueData;
 }
 
-type SortField = 'legacyScore' | 'wins' | 'winPct' | 'pf' | 'titles' | 'playoffPct';
+type SortField = 'legacyScore' | 'wins' | 'losses' | 'winPct' | 'pf' | 'titles' | 'playoffPct';
 
 export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
   const [sortField, setSortField] = useState<SortField>('titles');
@@ -121,6 +121,9 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
               <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('wins')}>
                 Wins <SortIcon field="wins" />
               </th>
+              <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('losses')}>
+                Losses <SortIcon field="losses" />
+              </th>
                <th className="px-4 py-4 text-center cursor-pointer hover:text-indigo-400 transition-colors" onClick={() => handleSort('winPct')}>
                 Win % <SortIcon field="winPct" />
               </th>
@@ -163,6 +166,9 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ data }) => {
                 </td>
                 <td className="px-4 py-4 text-center text-slate-300 text-sm">
                   {row.wins}
+                </td>
+                <td className="px-4 py-4 text-center text-slate-300 text-sm">
+                  {row.losses}
                 </td>
                 <td className="px-4 py-4 text-center">
                   <div className="flex flex-col items-center">

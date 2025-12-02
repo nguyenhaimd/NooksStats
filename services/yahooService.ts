@@ -134,68 +134,83 @@ export const fetchYahooData = async (accessToken: string, leagueKeys: string[]):
 };
 
 const fetchSeasonGames = async (leagueKey: string, accessToken: string, teamMap: Map<string, string>): Promise<Game[]> => {
-    // We request weeks 1-17 to cover standard fantasy seasons. 
-    const weeks = Array.from({length: 17}, (_, i) => i + 1).join(',');
-    const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${weeks}?format=json`;
+    // We split weeks into chunks to avoid timeouts or data size limits with Yahoo API
+    // Requesting 1-18 all at once sometimes returns incomplete data or fails
+    const chunk1 = Array.from({length: 9}, (_, i) => i + 1).join(','); // Weeks 1-9
+    const chunk2 = Array.from({length: 9}, (_, i) => i + 10).join(','); // Weeks 10-18
     
-    const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
-    });
-    
-    if (!response.ok) return [];
-
-    const json = await response.json();
-    const leagueNode = json?.fantasy_content?.leagues?.[0]?.league;
-    if (!leagueNode) return [];
-
-    const scoreboard = leagueNode.find((x:any) => x.scoreboard)?.scoreboard;
-    if (!scoreboard) return [];
-
-    // The scoreboard usually has a 'matchups' key at index 0
-    const matchupsNode = scoreboard[0]?.matchups;
-    if (!matchupsNode) return [];
-
     const games: Game[] = [];
-    const count = matchupsNode.count;
+    
+    const fetchChunk = async (weeksStr: string) => {
+        if (!weeksStr) return;
+        const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${weeksStr}?format=json`;
+        
+        try {
+            const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+            
+            if (!response.ok) return;
 
-    for(let i=0; i<count; i++) {
-        const matchupWrapper = matchupsNode[i + ""]?.matchup;
-        if (!matchupWrapper) continue;
+            const json = await response.json();
+            const leagueNode = json?.fantasy_content?.leagues?.[0]?.league;
+            if (!leagueNode) return;
 
-        // Metadata is usually first object, but check explicitly for keys
-        const meta = matchupWrapper.find((x:any) => x.week) || matchupWrapper[0]; 
-        const teamsWrapper = matchupWrapper.find((x:any) => x.teams)?.teams;
+            const scoreboard = leagueNode.find((x:any) => x.scoreboard)?.scoreboard;
+            if (!scoreboard) return;
 
-        if (teamsWrapper) {
-             const team0Data = teamsWrapper["0"]?.team;
-             const team1Data = teamsWrapper["1"]?.team;
-             
-             if (team0Data && team1Data) {
-                 const t0Key = team0Data[0]?.find((x:any) => x.team_key)?.team_key;
-                 const t0PtsObj = team0Data.find((x:any) => x.team_points)?.team_points;
-                 const t0Pts = parseFloat(t0PtsObj?.total || 0);
+            const matchupsNode = scoreboard[0]?.matchups;
+            if (!matchupsNode) return;
 
-                 const t1Key = team1Data[0]?.find((x:any) => x.team_key)?.team_key;
-                 const t1PtsObj = team1Data.find((x:any) => x.team_points)?.team_points;
-                 const t1Pts = parseFloat(t1PtsObj?.total || 0);
-                 
-                 const mgr0 = teamMap.get(t0Key);
-                 const mgr1 = teamMap.get(t1Key);
+            const count = matchupsNode.count;
+            for(let i=0; i<count; i++) {
+                const matchupWrapper = matchupsNode[i + ""]?.matchup;
+                if (!matchupWrapper) continue;
 
-                 if (mgr0 && mgr1) {
-                     games.push({
-                         week: parseInt(meta.week),
-                         isPlayoffs: meta.is_playoffs === '1',
-                         winnerTeamKey: meta.winner_team_key,
-                         isTie: meta.is_tied === '1',
-                         teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
-                         teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
-                     });
-                 }
-             }
+                // Metadata is usually first object, but check explicitly for keys
+                const meta = matchupWrapper.find((x:any) => x.week) || matchupWrapper[0]; 
+                const teamsWrapper = matchupWrapper.find((x:any) => x.teams)?.teams;
+
+                if (teamsWrapper) {
+                     const team0Data = teamsWrapper["0"]?.team;
+                     const team1Data = teamsWrapper["1"]?.team;
+                     
+                     if (team0Data && team1Data) {
+                         const t0Key = team0Data[0]?.find((x:any) => x.team_key)?.team_key;
+                         const t0PtsObj = team0Data.find((x:any) => x.team_points)?.team_points;
+                         const t0Pts = parseFloat(t0PtsObj?.total || 0);
+
+                         const t1Key = team1Data[0]?.find((x:any) => x.team_key)?.team_key;
+                         const t1PtsObj = team1Data.find((x:any) => x.team_points)?.team_points;
+                         const t1Pts = parseFloat(t1PtsObj?.total || 0);
+                         
+                         const mgr0 = teamMap.get(t0Key);
+                         const mgr1 = teamMap.get(t1Key);
+
+                         if (mgr0 && mgr1) {
+                             games.push({
+                                 week: parseInt(meta.week),
+                                 isPlayoffs: meta.is_playoffs === '1',
+                                 winnerTeamKey: meta.winner_team_key,
+                                 isTie: meta.is_tied === '1',
+                                 teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
+                                 teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
+                             });
+                         }
+                     }
+                }
+            }
+        } catch (e) {
+            console.warn(`Error fetching games chunk ${weeksStr}`, e);
         }
-    }
-    return games;
+    };
+
+    // Execute fetches in parallel
+    await Promise.all([fetchChunk(chunk1), fetchChunk(chunk2)]);
+    
+    // De-duplicate just in case (though splitting by weeks should avoid this) and sort
+    const uniqueGames = Array.from(new Set(games.map(g => JSON.stringify(g)))).map(s => JSON.parse(s));
+    return uniqueGames.sort((a: any, b: any) => a.week - b.week);
 };
 
 export const fetchPlayerDetails = async (accessToken: string, playerKeys: string[]) => {
@@ -316,7 +331,7 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
             id: guid, 
             name: displayName, 
             avatar, 
-            _lastSeenYear: year,
+            _lastSeenYear: year, 
             _isFallback: isHidden 
           });
         } else {

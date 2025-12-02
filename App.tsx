@@ -488,6 +488,8 @@ const App: React.FC = () => {
   const currentChampId = currentSeason.standings.find(s => s.stats.rank === 1)?.managerId;
   const currentChampName = leagueData.managers.find(m => m.id === currentChampId)?.name || 'Unknown';
 
+  const activeLeagueName = savedLeagues.find(l => l.id === activeLeagueId)?.name || (leagueData.seasons[0].key.includes(activeLeagueId) ? leagueData.seasons[0].key : "League");
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 selection:bg-indigo-500/30">
       <nav className="fixed top-0 left-0 right-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-700">
@@ -527,7 +529,7 @@ const App: React.FC = () => {
               <div className="space-y-8 animate-in fade-in duration-500">
                  <div className="relative overflow-hidden bg-gradient-to-r from-indigo-900 to-slate-900 border border-indigo-500/20 rounded-2xl p-8 text-center">
                     <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-10"></div>
-                    <h2 className="text-3xl font-bold text-white mb-4 relative z-10">{leagueData.seasons[0].key.includes(activeLeagueId) ? leagueData.seasons[0].key : "League"} Archive</h2>
+                    <h2 className="text-3xl font-bold text-white mb-4 relative z-10">{activeLeagueName} Archive</h2>
                     <p className="text-indigo-200/80 max-w-xl mx-auto mb-8 relative z-10 leading-relaxed">
                       Tracking {leagueData.seasons.length} seasons of fantasy dominance.
                     </p>
