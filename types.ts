@@ -19,6 +19,7 @@ export interface SeasonStats {
 export interface ManagerSeason {
   managerId: string;
   teamKey: string;
+  teamId?: string; // New field for robust matching
   stats: SeasonStats;
 }
 

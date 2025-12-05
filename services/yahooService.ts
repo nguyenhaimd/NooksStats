@@ -58,23 +58,28 @@ const fetchWithRetry = async (url: string, accessToken: string, retries = 5, bac
 
 // --- HELPER FUNCTIONS FOR ROBUST PARSING ---
 
-// Safely extracts a property from a node that could be an Object OR an Array of Objects
+// Safely extracts a property from a node, handling Objects, Arrays, and "0" wrappers
 const safeExtract = (node: any, key: string): any => {
   if (!node) return undefined;
   
-  // If array, look for the item containing the key
+  // 1. Direct access
+  if (node[key] !== undefined) return node[key];
+  
+  // 2. If array, search inside items
   if (Array.isArray(node)) {
     for (const item of node) {
-      if (item && typeof item === 'object' && key in item) {
-        return item[key];
+      if (item && typeof item === 'object') {
+         if (key in item) return item[key];
+         // Yahoo sometimes nests weirdly in array items: [{ "0": { ...target... } }]
+         if (item["0"] && typeof item["0"] === 'object' && key in item["0"]) return item["0"][key];
       }
     }
-    return undefined;
   }
   
-  // If object, just return the key
-  if (typeof node === 'object') {
-    return node[key];
+  // 3. If "0" wrapper exists (Yahoo specific quirk)
+  if (node["0"] && typeof node["0"] === 'object') {
+     // Check recursively in "0"
+     if (node["0"][key] !== undefined) return node["0"][key];
   }
 
   return undefined;
@@ -102,14 +107,41 @@ const getTeamKey = (teamData: any): string | null => {
   return null;
 };
 
+// Extract Team ID (simple number string) safely
+const getTeamId = (teamData: any): string | null => {
+  if (!teamData) return null;
+  
+  if (Array.isArray(teamData)) {
+    const metaList = teamData[0];
+    if (Array.isArray(metaList)) {
+       const idObj = metaList.find((x: any) => x && typeof x === 'object' && x.team_id);
+       return idObj ? String(idObj.team_id) : null;
+    }
+  } 
+  else if (typeof teamData === 'object' && teamData.team_id) {
+      return String(teamData.team_id);
+  }
+  return null;
+}
+
 // Extract Points safely
 const getTeamPoints = (teamData: any): number => {
     if (!teamData) return 0;
     
+    // Check direct
+    if (teamData.team_points && teamData.team_points.total) return parseFloat(teamData.team_points.total);
+
+    // Check via safeExtract in case it's buried
     const pointsObj = safeExtract(teamData, 'team_points');
     if (pointsObj && pointsObj.total) {
         return parseFloat(pointsObj.total);
     }
+    
+    // Check array index 1 (standard yahoo)
+    if (Array.isArray(teamData) && teamData[1] && teamData[1].team_points) {
+        return parseFloat(teamData[1].team_points.total);
+    }
+
     return 0;
 }
 
@@ -210,15 +242,30 @@ export const fetchYahooData = async (
         try {
             safeLog('INFO', `Starting matchup sync for ${season.year}...`);
             
-            // Build a map of TeamKey -> ManagerID for this season
-            const teamMap = new Map<string, string>();
-            season.standings.forEach(s => teamMap.set(s.teamKey, s.managerId));
+            // Build Maps: TeamKey -> ManagerID AND TeamID -> ManagerID
+            const teamKeyMap = new Map<string, string>();
+            const teamIdMap = new Map<string, string>();
+            
+            let teamKeyCount = 0;
+            season.standings.forEach(s => {
+                if (s.managerId) {
+                    if (s.teamKey) teamKeyMap.set(s.teamKey, s.managerId);
+                    if (s.teamId) teamIdMap.set(s.teamId, s.managerId);
+                    teamKeyCount++;
+                }
+            });
+
+            if (teamKeyCount === 0) {
+                safeLog('WARN', `No team keys found for ${season.year}. Cannot sync matchups.`);
+                continue;
+            }
 
             // Fetch games week by week
             season.games = await fetchSeasonGames(
                 season.key, 
                 accessToken, 
-                teamMap, 
+                teamKeyMap,
+                teamIdMap,
                 season.year, 
                 season.startWeek || 1,
                 season.endWeek || 16,
@@ -252,7 +299,8 @@ export const fetchYahooData = async (
 const fetchSeasonGames = async (
     leagueKey: string, 
     accessToken: string, 
-    teamMap: Map<string, string>, 
+    teamKeyMap: Map<string, string>,
+    teamIdMap: Map<string, string>,
     year: number,
     startWeek: number,
     endWeek: number,
@@ -275,7 +323,6 @@ const fetchSeasonGames = async (
             const response = await fetchWithRetry(url, accessToken, 5, 2000);
             
             if (!response.ok) {
-                // If 404/400, it likely means the week doesn't exist, which is fine at end of season
                 if (response.status === 400 || response.status === 404) {
                      log('INFO', `Week ${week} not found. Stopping season fetch.`);
                      break; 
@@ -285,33 +332,35 @@ const fetchSeasonGames = async (
             }
 
             const json = await response.json();
-            
-            // ROBUST TRAVERSAL
             const fc = json?.fantasy_content;
-            
-            // Leagues node is usually { "0": { league: ... }, count: 1 } for this request
-            const leaguesNode = fc?.leagues;
-            
-            // Try to find the league object. 
-            // It is NOT safeExtract(leaguesNode, 'league') because leaguesNode is not an array of leagues here, it's a map with "0".
-            let leagueNode = leaguesNode?.[0]?.league;
-            
-            // Fallback for weird structures
-            if (!leagueNode && leaguesNode && typeof leaguesNode === 'object') {
-                 leagueNode = leaguesNode["0"]?.league;
+
+            // 1. ROBUST LEAGUE EXTRACTION
+            let leagueNode = null;
+            if (fc?.leagues) {
+                 if (Array.isArray(fc.leagues)) {
+                    leagueNode = fc.leagues[0]?.league;
+                 } else if (fc.leagues["0"]?.league) {
+                    leagueNode = fc.leagues["0"]?.league;
+                 }
             }
 
             if (!leagueNode) {
-                 console.warn(`Could not find league node for ${year} week ${week}`);
+                 log('WARN', `Could not find league node structure for ${year} week ${week}`);
                  continue;
             }
 
-            // 2. Find Scoreboard
+            // 2. ROBUST SCOREBOARD EXTRACTION
             const scoreboard = safeExtract(leagueNode, 'scoreboard');
-            if (!scoreboard) continue;
+            if (!scoreboard) {
+                 log('WARN', `Scoreboard missing for ${year} week ${week}`);
+                 continue;
+            }
 
-            // 3. Find Matchups
-            const matchupsNode = safeExtract(scoreboard, 'matchups');
+            // 3. ROBUST MATCHUPS EXTRACTION
+            let matchupsNode = scoreboard.matchups;
+            if (!matchupsNode && scoreboard["0"]?.matchups) {
+                matchupsNode = scoreboard["0"].matchups;
+            }
             
             let count = 0;
             let getMatchupByIndex = (i: number) => null;
@@ -327,37 +376,38 @@ const fetchSeasonGames = async (
                         return wrapper ? wrapper.matchup : null;
                     };
                 } else if (matchupsNode.matchup) {
+                    // Single matchup object case
                     count = 1;
                     getMatchupByIndex = (i) => matchupsNode.matchup;
                 }
             }
 
-            // SMART STOP: If we have no matchups for 2 consecutive weeks, stop fetching
             if (count === 0) {
                 consecutiveEmptyWeeks++;
                 if (consecutiveEmptyWeeks >= 2 && games.length > 0) {
                     log('INFO', `Season appears to have ended (2 empty weeks). Stopping at week ${week}.`);
                     break;
                 }
-                // log('WARN', `No matchups found for Week ${week}`);
+                if (consecutiveEmptyWeeks > 2) log('WARN', `No matchups found for Week ${week}`);
                 continue;
             } else {
                 consecutiveEmptyWeeks = 0;
             }
+
+            let gamesAddedThisWeek = 0;
 
             for(let i=0; i<count; i++) {
                 try {
                     const matchupData = getMatchupByIndex(i);
                     if (!matchupData) continue;
 
-                    // 5. Extract Meta (week, playoffs, etc)
+                    // 5. Extract Meta
                     const weekStr = safeExtract(matchupData, 'week');
                     const isPlayoffsStr = safeExtract(matchupData, 'is_playoffs');
                     const winnerKey = safeExtract(matchupData, 'winner_team_key');
                     const isTiedStr = safeExtract(matchupData, 'is_tied');
 
                     // 6. Extract Teams
-                    // Teams is usually { "0": {team}, "1": {team}, count: 2 }
                     const teamsWrapper = safeExtract(matchupData, 'teams');
                     if (!teamsWrapper) continue;
 
@@ -375,21 +425,32 @@ const fetchSeasonGames = async (
                         const t0Key = getTeamKey(team0Wrapper);
                         const t1Key = getTeamKey(team1Wrapper);
                         
+                        const t0Id = getTeamId(team0Wrapper);
+                        const t1Id = getTeamId(team1Wrapper);
+
                         const t0Pts = getTeamPoints(team0Wrapper);
                         const t1Pts = getTeamPoints(team1Wrapper);
                         
-                        const mgr0 = t0Key ? teamMap.get(t0Key) : null;
-                        const mgr1 = t1Key ? teamMap.get(t1Key) : null;
+                        // Try matching by Key first, then ID
+                        const mgr0 = (t0Key ? teamKeyMap.get(t0Key) : null) || (t0Id ? teamIdMap.get(t0Id) : null);
+                        const mgr1 = (t1Key ? teamKeyMap.get(t1Key) : null) || (t1Id ? teamIdMap.get(t1Id) : null);
 
-                        if (mgr0 && mgr1 && t0Key && t1Key) {
+                        if (mgr0 && mgr1) {
                             games.push({
                                 week: weekStr ? parseInt(weekStr) : week,
                                 isPlayoffs: isPlayoffsStr === '1',
                                 winnerTeamKey: winnerKey,
                                 isTie: isTiedStr === '1',
-                                teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
-                                teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
+                                teamA: { managerId: mgr0, teamKey: t0Key || '', points: t0Pts },
+                                teamB: { managerId: mgr1, teamKey: t1Key || '', points: t1Pts }
                             });
+                            gamesAddedThisWeek++;
+                        } else {
+                            // Detailed Logging for debug
+                            if (i === 0) { // Only log first failure per week to avoid spam
+                                if (!mgr0) log('WARN', `Manager A not found. Key: ${t0Key}, ID: ${t0Id}. Map Size: ${teamKeyMap.size}/${teamIdMap.size}`);
+                                if (!mgr1) log('WARN', `Manager B not found. Key: ${t1Key}, ID: ${t1Id}`);
+                            }
                         }
                     }
                 } catch (err) {
@@ -482,7 +543,6 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
     const year = parseInt(metadata.season);
 
     // Extract Settings to get Start/End Week
-    // Default based on era if settings are missing/unparseable
     let startWeek = 1;
     let endWeek = (year >= 2021) ? 17 : 16; 
 
@@ -508,6 +568,7 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
 
         const teamMeta = teamWrapper[0];
         const teamKey = teamMeta.find((x: any) => x.team_key)?.team_key;
+        const teamId = teamMeta.find((x: any) => x.team_id)?.team_id; // Capture simple ID
         const teamStandingsObj = teamWrapper[2]?.team_standings;
         
         const managersList = teamMeta.find((x: any) => x.managers)?.managers;
@@ -549,6 +610,7 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
         seasonStandings.push({
           managerId: guid,
           teamKey: teamKey || '',
+          teamId: teamId ? String(teamId) : undefined,
           stats: {
             rank: teamStandingsObj.rank,
             wins: parseInt(outcome.wins),
