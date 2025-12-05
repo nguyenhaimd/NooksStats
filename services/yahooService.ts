@@ -263,6 +263,7 @@ const fetchSeasonGames = async (
     // Use actual settings bounds
     const MAX_WEEKS = endWeek || 18;
     const START_WEEK = startWeek || 1;
+    let consecutiveEmptyWeeks = 0;
     
     for (let week = START_WEEK; week <= MAX_WEEKS; week++) {
         const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${week}?format=json`;
@@ -276,7 +277,7 @@ const fetchSeasonGames = async (
             if (!response.ok) {
                 // If 404/400, it likely means the week doesn't exist, which is fine at end of season
                 if (response.status === 400 || response.status === 404) {
-                     // log('WARN', `Week ${week} not found. Stopping season fetch.`);
+                     log('INFO', `Week ${week} not found. Stopping season fetch.`);
                      break; 
                 }
                 log('WARN', `Skipping Week ${week} (API Status: ${response.status})`);
@@ -286,45 +287,63 @@ const fetchSeasonGames = async (
             const json = await response.json();
             
             // ROBUST TRAVERSAL
-            // 1. Find League Node
             const fc = json?.fantasy_content;
-            const leaguesNode = safeExtract(fc, 'leagues');
-            const leagueNode = safeExtract(leaguesNode, 'league');
+            
+            // Leagues node is usually { "0": { league: ... }, count: 1 } for this request
+            const leaguesNode = fc?.leagues;
+            
+            // Try to find the league object. 
+            // It is NOT safeExtract(leaguesNode, 'league') because leaguesNode is not an array of leagues here, it's a map with "0".
+            let leagueNode = leaguesNode?.[0]?.league;
+            
+            // Fallback for weird structures
+            if (!leagueNode && leaguesNode && typeof leaguesNode === 'object') {
+                 leagueNode = leaguesNode["0"]?.league;
+            }
 
-            if (!leagueNode) continue;
+            if (!leagueNode) {
+                 console.warn(`Could not find league node for ${year} week ${week}`);
+                 continue;
+            }
 
             // 2. Find Scoreboard
             const scoreboard = safeExtract(leagueNode, 'scoreboard');
             if (!scoreboard) continue;
 
             // 3. Find Matchups
-            // Matchups is often { "0": {matchup}, "1": {matchup}, "count": 2 }
-            // OR sometimes just [ {matchup}, {matchup} ]
             const matchupsNode = safeExtract(scoreboard, 'matchups');
-            if (!matchupsNode) {
-                // log('WARN', `No matchups node for Week ${week}`);
-                continue;
-            }
-
+            
             let count = 0;
             let getMatchupByIndex = (i: number) => null;
 
-            if (Array.isArray(matchupsNode)) {
-                count = matchupsNode.length;
-                getMatchupByIndex = (i) => matchupsNode[i]?.matchup;
-            } else if (matchupsNode.count) {
-                count = parseInt(matchupsNode.count);
-                getMatchupByIndex = (i) => {
-                    const wrapper = matchupsNode[String(i)];
-                    return wrapper ? wrapper.matchup : null;
-                };
-            } else if (matchupsNode.matchup) {
-                 // Single matchup object direct case (rare but possible)
-                 count = 1;
-                 getMatchupByIndex = (i) => matchupsNode.matchup;
+            if (matchupsNode) {
+                if (Array.isArray(matchupsNode)) {
+                    count = matchupsNode.length;
+                    getMatchupByIndex = (i) => matchupsNode[i]?.matchup;
+                } else if (matchupsNode.count) {
+                    count = parseInt(matchupsNode.count);
+                    getMatchupByIndex = (i) => {
+                        const wrapper = matchupsNode[String(i)];
+                        return wrapper ? wrapper.matchup : null;
+                    };
+                } else if (matchupsNode.matchup) {
+                    count = 1;
+                    getMatchupByIndex = (i) => matchupsNode.matchup;
+                }
             }
 
-            if (count === 0) continue;
+            // SMART STOP: If we have no matchups for 2 consecutive weeks, stop fetching
+            if (count === 0) {
+                consecutiveEmptyWeeks++;
+                if (consecutiveEmptyWeeks >= 2 && games.length > 0) {
+                    log('INFO', `Season appears to have ended (2 empty weeks). Stopping at week ${week}.`);
+                    break;
+                }
+                // log('WARN', `No matchups found for Week ${week}`);
+                continue;
+            } else {
+                consecutiveEmptyWeeks = 0;
+            }
 
             for(let i=0; i<count; i++) {
                 try {
@@ -463,8 +482,10 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
     const year = parseInt(metadata.season);
 
     // Extract Settings to get Start/End Week
+    // Default based on era if settings are missing/unparseable
     let startWeek = 1;
-    let endWeek = 16;
+    let endWeek = (year >= 2021) ? 17 : 16; 
+
     const settingsNode = leagueData.find((n: any) => n.settings)?.settings;
     if (settingsNode && Array.isArray(settingsNode)) {
         const s = settingsNode[0];
