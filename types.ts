@@ -1,3 +1,4 @@
+
 export interface Manager {
   id: string;
   name: string;
@@ -65,6 +66,8 @@ export interface Season {
   draft?: DraftPick[];
   transactions?: Transaction[];
   games?: Game[]; // Full season schedule/results
+  startWeek?: number;
+  endWeek?: number;
 }
 
 export interface LeagueData {

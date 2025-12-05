@@ -1,6 +1,7 @@
+
 import React, { useState, useMemo } from 'react';
 import { LeagueData } from '../types';
-import { Trophy, Swords, TrendingUp, AlertCircle } from 'lucide-react';
+import { Trophy, Swords, TrendingUp, AlertCircle, Database } from 'lucide-react';
 import { ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, CartesianGrid, AreaChart, Area } from 'recharts';
 
 interface VersusProps {
@@ -52,12 +53,13 @@ const CustomTooltip = ({ active, payload, label, managerA, managerB }: any) => {
     if (active && payload && payload.length) {
         const data = payload[0].payload;
         const matchups = data.matchups || [];
+        const hasData = data.hasData;
 
         return (
             <div className="bg-slate-900/95 backdrop-blur border border-slate-700 p-4 rounded-xl shadow-2xl min-w-[240px] z-50 animate-in fade-in zoom-in-95 duration-200">
                 <div className="font-bold text-slate-200 mb-3 border-b border-slate-700 pb-2 flex justify-between items-center">
                     <span>{data.year} Season</span>
-                    {matchups.length > 0 && (
+                    {hasData && matchups.length > 0 && (
                         <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-600">
                            {matchups.length} Matchups
                         </span>
@@ -83,34 +85,39 @@ const CustomTooltip = ({ active, payload, label, managerA, managerB }: any) => {
                 </div>
 
                 {/* H2H Games */}
-                {matchups.length > 0 && (
-                    <div className="bg-black/30 rounded-lg p-3 space-y-2 border border-slate-800">
-                        <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-1 flex items-center gap-1.5">
-                            <Swords className="w-3 h-3" /> Head-to-Head
-                        </div>
-                        {matchups.map((m: any, idx: number) => (
-                            <div key={idx} className="text-xs">
-                                <div className="flex justify-between text-slate-500 text-[10px] mb-1">
-                                   <span>Week {m.week}</span>
-                                   {m.isPlayoffs && <span className="text-yellow-500 font-bold flex items-center gap-1"><Trophy className="w-3 h-3" /> Playoffs</span>}
-                                </div>
-                                <div className="flex justify-between items-center bg-slate-800/80 rounded px-2 py-1.5 border border-slate-700/50">
-                                    <span className={`font-mono font-bold ${m.myScore > m.oppScore ? 'text-indigo-400' : 'text-slate-400'}`}>
-                                        {m.myScore.toFixed(1)}
-                                    </span>
-                                    <span className="text-slate-600 text-[10px] px-1">vs</span>
-                                    <span className={`font-mono font-bold ${m.oppScore > m.myScore ? 'text-purple-400' : 'text-slate-400'}`}>
-                                        {m.oppScore.toFixed(1)}
-                                    </span>
-                                </div>
+                {hasData ? (
+                    matchups.length > 0 ? (
+                        <div className="bg-black/30 rounded-lg p-3 space-y-2 border border-slate-800">
+                            <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-1 flex items-center gap-1.5">
+                                <Swords className="w-3 h-3" /> Head-to-Head
                             </div>
-                        ))}
-                    </div>
-                )}
-                
-                {matchups.length === 0 && (
-                    <div className="text-[10px] text-slate-600 italic text-center py-1">
-                        No direct matchups this season
+                            {matchups.map((m: any, idx: number) => (
+                                <div key={idx} className="text-xs">
+                                    <div className="flex justify-between text-slate-500 text-[10px] mb-1">
+                                    <span>Week {m.week}</span>
+                                    {m.isPlayoffs && <span className="text-yellow-500 font-bold flex items-center gap-1"><Trophy className="w-3 h-3" /> Playoffs</span>}
+                                    </div>
+                                    <div className="flex justify-between items-center bg-slate-800/80 rounded px-2 py-1.5 border border-slate-700/50">
+                                        <span className={`font-mono font-bold ${m.myScore > m.oppScore ? 'text-indigo-400' : 'text-slate-400'}`}>
+                                            {m.myScore.toFixed(1)}
+                                        </span>
+                                        <span className="text-slate-600 text-[10px] px-1">vs</span>
+                                        <span className={`font-mono font-bold ${m.oppScore > m.myScore ? 'text-purple-400' : 'text-slate-400'}`}>
+                                            {m.oppScore.toFixed(1)}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="text-[10px] text-slate-600 italic text-center py-1">
+                            No direct matchups this season
+                        </div>
+                    )
+                ) : (
+                    <div className="flex items-center gap-2 text-[10px] text-red-400 bg-red-500/10 p-2 rounded">
+                        <Database className="w-3 h-3" />
+                        Game data missing for this year
                     </div>
                 )}
             </div>
@@ -146,10 +153,12 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
       const standB = season.standings.find(s => s.managerId === managerB.id);
 
       const seasonMatchups: any[] = [];
+      const seasonHasData = season.games && season.games.length > 0;
 
       // Calculate Direct Matchups if games are present in league data
-      if (season.games && season.games.length > 0) {
-          season.games.forEach(g => {
+      if (seasonHasData) {
+          hasMatchupData = true;
+          season.games!.forEach(g => {
               let myTeam, oppTeam;
               if (g.teamA.managerId === managerA.id && g.teamB.managerId === managerB.id) {
                   myTeam = g.teamA;
@@ -160,7 +169,6 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
               }
 
               if (myTeam && oppTeam) {
-                  hasMatchupData = true;
                   let result = 'T';
                   if (myTeam.points > oppTeam.points) { h2hWins++; result='W'; }
                   else if (myTeam.points < oppTeam.points) { h2hLosses++; result='L'; }
@@ -186,7 +194,8 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
           year: season.year,
           [managerA.name]: standA.stats.pointsFor,
           [managerB.name]: standB.stats.pointsFor,
-          matchups: seasonMatchups.sort((a,b) => a.week - b.week)
+          matchups: seasonMatchups.sort((a,b) => a.week - b.week),
+          hasData: seasonHasData
         });
       }
 

@@ -1,3 +1,4 @@
+
 import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction, LeagueSummary, Game } from '../types';
 
 const PROXY_URL = 'https://corsproxy.io/?';
@@ -186,7 +187,8 @@ export const fetchYahooData = async (
 
   for (const chunk of chunks) {
      const keysString = chunk.join(',');
-     const targetUrl = `${BASE_URL}/leagues;league_keys=${keysString};out=standings,draftresults,transactions?format=json`;
+     // ADD settings to output to get start_week / end_week
+     const targetUrl = `${BASE_URL}/leagues;league_keys=${keysString};out=standings,draftresults,transactions,settings?format=json`;
      
      safeLog('INFO', `Fetching metadata for ${chunk.length} league(s)...`);
 
@@ -213,16 +215,24 @@ export const fetchYahooData = async (
             season.standings.forEach(s => teamMap.set(s.teamKey, s.managerId));
 
             // Fetch games week by week
-            season.games = await fetchSeasonGames(season.key, accessToken, teamMap, season.year, safeLog);
+            season.games = await fetchSeasonGames(
+                season.key, 
+                accessToken, 
+                teamMap, 
+                season.year, 
+                season.startWeek || 1,
+                season.endWeek || 16,
+                safeLog
+            );
             
             if (season.games.length > 0) {
                 safeLog('SUCCESS', `Loaded ${season.games.length} games for ${season.year}.`);
             } else {
-                safeLog('WARN', `No games found for ${season.year}.`);
+                safeLog('WARN', `No games found for ${season.year}. This is unexpected.`);
             }
             
             // Polite delay between seasons
-            await wait(2000); 
+            await wait(1500); 
 
         } catch (e: any) {
             safeLog('ERROR', `Failed to fetch matchups for season ${season.year}: ${e.message}`);
@@ -244,14 +254,17 @@ const fetchSeasonGames = async (
     accessToken: string, 
     teamMap: Map<string, string>, 
     year: number,
+    startWeek: number,
+    endWeek: number,
     log: Logger
 ): Promise<Game[]> => {
     const games: Game[] = [];
     
-    // Fetch weeks 1 through 18 sequentially.
-    const MAX_WEEKS = 18;
+    // Use actual settings bounds
+    const MAX_WEEKS = endWeek || 18;
+    const START_WEEK = startWeek || 1;
     
-    for (let week = 1; week <= MAX_WEEKS; week++) {
+    for (let week = START_WEEK; week <= MAX_WEEKS; week++) {
         const url = `${BASE_URL}/leagues;league_keys=${leagueKey}/scoreboard;week=${week}?format=json`;
         
         log('INFO', `Fetching ${year} Week ${week} scoreboard...`);
@@ -261,6 +274,11 @@ const fetchSeasonGames = async (
             const response = await fetchWithRetry(url, accessToken, 5, 2000);
             
             if (!response.ok) {
+                // If 404/400, it likely means the week doesn't exist, which is fine at end of season
+                if (response.status === 400 || response.status === 404) {
+                     // log('WARN', `Week ${week} not found. Stopping season fetch.`);
+                     break; 
+                }
                 log('WARN', `Skipping Week ${week} (API Status: ${response.status})`);
                 continue;
             }
@@ -273,24 +291,21 @@ const fetchSeasonGames = async (
             const leaguesNode = safeExtract(fc, 'leagues');
             const leagueNode = safeExtract(leaguesNode, 'league');
 
-            if (!leagueNode) {
-                // log('WARN', `Week ${week}: No league data found.`);
-                continue;
-            }
+            if (!leagueNode) continue;
 
             // 2. Find Scoreboard
             const scoreboard = safeExtract(leagueNode, 'scoreboard');
-            if (!scoreboard) {
-                // log('WARN', `Week ${week}: No scoreboard found.`);
+            if (!scoreboard) continue;
+
+            // 3. Find Matchups
+            // Matchups is often { "0": {matchup}, "1": {matchup}, "count": 2 }
+            // OR sometimes just [ {matchup}, {matchup} ]
+            const matchupsNode = safeExtract(scoreboard, 'matchups');
+            if (!matchupsNode) {
+                // log('WARN', `No matchups node for Week ${week}`);
                 continue;
             }
 
-            // 3. Find Matchups
-            const matchupsNode = safeExtract(scoreboard, 'matchups');
-            if (!matchupsNode) continue;
-
-            // 4. Iterate Matchups
-            // Matchups can be an array OR an object with {0:..., 1:..., count: "N"}
             let count = 0;
             let getMatchupByIndex = (i: number) => null;
 
@@ -303,58 +318,68 @@ const fetchSeasonGames = async (
                     const wrapper = matchupsNode[String(i)];
                     return wrapper ? wrapper.matchup : null;
                 };
+            } else if (matchupsNode.matchup) {
+                 // Single matchup object direct case (rare but possible)
+                 count = 1;
+                 getMatchupByIndex = (i) => matchupsNode.matchup;
             }
 
             if (count === 0) continue;
 
-            let gamesFound = 0;
-
             for(let i=0; i<count; i++) {
-                const matchupData = getMatchupByIndex(i);
-                if (!matchupData) continue;
+                try {
+                    const matchupData = getMatchupByIndex(i);
+                    if (!matchupData) continue;
 
-                // 5. Extract Meta (week, playoffs, etc)
-                // Matchup data is usually [ {week:..}, {teams:..} ]
-                // Use safeExtract to find the object containing 'week'
-                const weekStr = safeExtract(matchupData, 'week');
-                const isPlayoffsStr = safeExtract(matchupData, 'is_playoffs');
-                const winnerKey = safeExtract(matchupData, 'winner_team_key');
-                const isTiedStr = safeExtract(matchupData, 'is_tied');
+                    // 5. Extract Meta (week, playoffs, etc)
+                    const weekStr = safeExtract(matchupData, 'week');
+                    const isPlayoffsStr = safeExtract(matchupData, 'is_playoffs');
+                    const winnerKey = safeExtract(matchupData, 'winner_team_key');
+                    const isTiedStr = safeExtract(matchupData, 'is_tied');
 
-                // 6. Extract Teams
-                const teamsWrapper = safeExtract(matchupData, 'teams');
-                if (!teamsWrapper) continue;
+                    // 6. Extract Teams
+                    // Teams is usually { "0": {team}, "1": {team}, count: 2 }
+                    const teamsWrapper = safeExtract(matchupData, 'teams');
+                    if (!teamsWrapper) continue;
 
-                // Teams wrapper is usually {0: {team:..}, 1: {team:..}, count: "2"}
-                const team0Wrapper = teamsWrapper["0"]?.team;
-                const team1Wrapper = teamsWrapper["1"]?.team;
+                    let team0Wrapper, team1Wrapper;
+                    
+                    if (Array.isArray(teamsWrapper)) {
+                        team0Wrapper = teamsWrapper[0]?.team;
+                        team1Wrapper = teamsWrapper[1]?.team;
+                    } else {
+                        team0Wrapper = teamsWrapper["0"]?.team;
+                        team1Wrapper = teamsWrapper["1"]?.team;
+                    }
 
-                if (team0Wrapper && team1Wrapper) {
-                     const t0Key = getTeamKey(team0Wrapper);
-                     const t1Key = getTeamKey(team1Wrapper);
-                     
-                     const t0Pts = getTeamPoints(team0Wrapper);
-                     const t1Pts = getTeamPoints(team1Wrapper);
-                     
-                     const mgr0 = t0Key ? teamMap.get(t0Key) : null;
-                     const mgr1 = t1Key ? teamMap.get(t1Key) : null;
+                    if (team0Wrapper && team1Wrapper) {
+                        const t0Key = getTeamKey(team0Wrapper);
+                        const t1Key = getTeamKey(team1Wrapper);
+                        
+                        const t0Pts = getTeamPoints(team0Wrapper);
+                        const t1Pts = getTeamPoints(team1Wrapper);
+                        
+                        const mgr0 = t0Key ? teamMap.get(t0Key) : null;
+                        const mgr1 = t1Key ? teamMap.get(t1Key) : null;
 
-                     if (mgr0 && mgr1 && t0Key && t1Key) {
-                         games.push({
-                             week: weekStr ? parseInt(weekStr) : week,
-                             isPlayoffs: isPlayoffsStr === '1',
-                             winnerTeamKey: winnerKey,
-                             isTie: isTiedStr === '1',
-                             teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
-                             teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
-                         });
-                         gamesFound++;
-                     }
+                        if (mgr0 && mgr1 && t0Key && t1Key) {
+                            games.push({
+                                week: weekStr ? parseInt(weekStr) : week,
+                                isPlayoffs: isPlayoffsStr === '1',
+                                winnerTeamKey: winnerKey,
+                                isTie: isTiedStr === '1',
+                                teamA: { managerId: mgr0, teamKey: t0Key, points: t0Pts },
+                                teamB: { managerId: mgr1, teamKey: t1Key, points: t1Pts }
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.error("Error parsing single matchup", err);
                 }
             }
             
-            // Polite delay to avoid rate limits (Critical for deep history syncs)
-            await wait(1500);
+            // Polite delay to avoid rate limits
+            await wait(1000);
 
         } catch (e: any) {
             log('ERROR', `Error fetching games for ${year} week ${week}: ${e.message}`);
@@ -436,6 +461,16 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
     const metadata = leagueData[0];
     const leagueKey = metadata.league_key;
     const year = parseInt(metadata.season);
+
+    // Extract Settings to get Start/End Week
+    let startWeek = 1;
+    let endWeek = 16;
+    const settingsNode = leagueData.find((n: any) => n.settings)?.settings;
+    if (settingsNode && Array.isArray(settingsNode)) {
+        const s = settingsNode[0];
+        if (s.start_week) startWeek = parseInt(s.start_week);
+        if (s.end_week) endWeek = parseInt(s.end_week);
+    }
 
     const standingsNode = leagueData.find((n: any) => n.standings);
     const draftNode = leagueData.find((n: any) => n.draft_results);
@@ -580,7 +615,9 @@ const transformYahooData = async (data: any, accessToken: string, managersMap: M
       standings: seasonStandings,
       draft: draftPicks.sort((a,b) => a.pick - b.pick),
       transactions,
-      games: [] 
+      games: [],
+      startWeek,
+      endWeek
     });
   }
 

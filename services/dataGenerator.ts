@@ -1,4 +1,5 @@
-import { LeagueData, Manager, Season, ManagerSeason, DraftPick } from '../types';
+
+import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Game } from '../types';
 
 // Provided Yahoo League Keys mapped to implied years
 const LEAGUE_KEYS = [
@@ -81,12 +82,34 @@ export const generateLeagueData = (): LeagueData => {
         });
     }
 
+    // Mock Games
+    const games: Game[] = [];
+    const numWeeks = 16;
+    for (let w = 1; w <= numWeeks; w++) {
+        // Simple round robin simulation
+        for (let i = 0; i < 12; i+=2) {
+             const m1 = seasonManagers[i];
+             const m2 = seasonManagers[i+1];
+             const score1 = 80 + seededRandom(w * i) * 80;
+             const score2 = 80 + seededRandom(w * (i+1)) * 80;
+             
+             games.push({
+                 week: w,
+                 isPlayoffs: w > 14,
+                 isTie: false,
+                 teamA: { managerId: m1.id, teamKey: `t.${i}`, points: score1 },
+                 teamB: { managerId: m2.id, teamKey: `t.${i+1}`, points: score2 }
+             });
+        }
+    }
+
     return {
       year: entry.year,
       key: entry.key,
       championId: standings[0].managerId,
       standings,
-      draft
+      draft,
+      games
     };
   });
 
