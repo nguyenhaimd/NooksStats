@@ -488,9 +488,7 @@ const App: React.FC = () => {
                <Trophy className="w-6 h-6 text-indigo-500" />
                NooKs Legacy
              </div>
-             <button onClick={() => setIsConfiguring(true)} className="text-xs text-slate-500 hover:text-white flex items-center gap-1">
-               <Settings className="w-3 h-3" /> Database Config
-             </button>
+             {/* Database Config Button Removed */}
            </div>
          </nav>
          

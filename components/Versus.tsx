@@ -1,12 +1,11 @@
-
 import React, { useState, useMemo } from 'react';
 import { LeagueData } from '../types';
-import { Trophy, Swords, TrendingUp, AlertCircle, Database } from 'lucide-react';
-import { ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, CartesianGrid, AreaChart, Area } from 'recharts';
+import { Trophy, Swords, TrendingUp, AlertCircle, Database, Users, Skull, Target, Flame, Snowflake, Scale } from 'lucide-react';
+import { ResponsiveContainer, XAxis, YAxis, Tooltip, Legend, CartesianGrid, AreaChart, Area, BarChart, Bar, Cell, ReferenceLine } from 'recharts';
 
 interface VersusProps {
   data: LeagueData;
-  token?: string; // Made optional as it's no longer critical for H2H
+  token?: string;
 }
 
 const StatBar = ({ label, valA, valB, unit = '', reverse = false, decimals = 0 }: { label: string, valA: number, valB: number, unit?: string, reverse?: boolean, decimals?: number }) => {
@@ -133,11 +132,125 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
   const managerA = data.managers.find(m => m.id === managerAId);
   const managerB = data.managers.find(m => m.id === managerBId);
 
+  // --- Rivalry Matrix Calculation ---
+  const rivalries = useMemo(() => {
+    if (!managerA) return [];
+    
+    // Structure to hold stats + chronological game history
+    const stats: Record<string, { 
+        wins: number, losses: number, ties: number, 
+        pf: number, pa: number, games: number,
+        history: { result: 'W' | 'L' | 'T', date: number }[] 
+    }> = {};
+    
+    // Initialize
+    data.managers.forEach(m => {
+        if (m.id !== managerA.id) {
+            stats[m.id] = { wins: 0, losses: 0, ties: 0, pf: 0, pa: 0, games: 0, history: [] };
+        }
+    });
+
+    // Iterate seasons chronologically
+    data.seasons.forEach(s => {
+        if (s.games) {
+            // Sort games by week to ensure history order
+            const sortedGames = [...s.games].sort((a,b) => a.week - b.week);
+            
+            sortedGames.forEach(g => {
+                const isA = g.teamA.managerId === managerA.id;
+                const isB = g.teamB.managerId === managerA.id;
+
+                if (isA || isB) {
+                    const myTeam = isA ? g.teamA : g.teamB;
+                    const oppTeam = isA ? g.teamB : g.teamA;
+                    const oppId = oppTeam.managerId;
+
+                    if (stats[oppId]) {
+                        stats[oppId].games++;
+                        stats[oppId].pf += myTeam.points;
+                        stats[oppId].pa += oppTeam.points;
+
+                        let result: 'W' | 'L' | 'T' = 'T';
+                        if (Math.abs(myTeam.points - oppTeam.points) < 0.01) {
+                            stats[oppId].ties++;
+                            result = 'T';
+                        } else if (myTeam.points > oppTeam.points) {
+                            stats[oppId].wins++;
+                            result = 'W';
+                        } else {
+                            stats[oppId].losses++;
+                            result = 'L';
+                        }
+                        
+                        // Store date as simple integer (YearWeek) for sorting if needed, though loop order implies it
+                        stats[oppId].history.push({ result, date: s.year * 100 + g.week });
+                    }
+                }
+            });
+        }
+    });
+
+    return Object.entries(stats)
+        .map(([id, stat]) => {
+            const mgr = data.managers.find(m => m.id === id);
+            const winPct = stat.games > 0 ? (stat.wins / stat.games) * 100 : 0;
+            
+            // Calculate Streak
+            let currentStreak = { type: 'T', count: 0 };
+            if (stat.history.length > 0) {
+                const lastIdx = stat.history.length - 1;
+                const lastResult = stat.history[lastIdx].result;
+                currentStreak.type = lastResult;
+                for (let i = lastIdx; i >= 0; i--) {
+                    if (stat.history[i].result === lastResult) {
+                        currentStreak.count++;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            return {
+                ...stat,
+                manager: mgr,
+                winPct,
+                currentStreak
+            };
+        })
+        .filter(r => r.manager && r.games > 0)
+        .sort((a, b) => b.games - a.games); // Default sort by games played
+
+  }, [managerA, data]);
+
+  // Identify Nemesis (Min 5 games, lowest win %) and Pigeon (Min 5 games, highest win %)
+  const { nemesis, pigeon } = useMemo(() => {
+     const qualified = rivalries.filter(r => r.games >= 5);
+     if (qualified.length === 0) return { nemesis: null, pigeon: null };
+     
+     const sortedByWinPct = [...qualified].sort((a,b) => a.winPct - b.winPct);
+     return {
+         nemesis: sortedByWinPct[0],
+         pigeon: sortedByWinPct[sortedByWinPct.length - 1]
+     };
+  }, [rivalries]);
+
+  // Prepare Chart Data for Rivalries
+  const rivalryChartData = useMemo(() => {
+    return rivalries.map(r => ({
+      name: r.manager?.name || 'Unknown',
+      shortName: r.manager?.name?.split(' ')[0] || r.manager?.name?.substring(0, 8),
+      winPct: r.winPct,
+      record: `${r.wins}-${r.losses}${r.ties > 0 ? '-' + r.ties : ''}`,
+      games: r.games
+    })).sort((a,b) => b.winPct - a.winPct);
+  }, [rivalries]);
+
+
   const comparison = useMemo(() => {
     if (!managerA || !managerB) return null;
 
-    let statsA = { wins: 0, losses: 0, titles: 0, points: 0, playoffApps: 0, seasons: 0, bestRank: 99, ranks: [] as number[] };
-    let statsB = { wins: 0, losses: 0, titles: 0, points: 0, playoffApps: 0, seasons: 0, bestRank: 99, ranks: [] as number[] };
+    let statsA = { wins: 0, losses: 0, ties: 0, titles: 0, points: 0, playoffApps: 0, seasons: 0, bestRank: 99, ranks: [] as number[] };
+    let statsB = { wins: 0, losses: 0, ties: 0, titles: 0, points: 0, playoffApps: 0, seasons: 0, bestRank: 99, ranks: [] as number[] };
     
     const chartData: any[] = [];
     
@@ -202,6 +315,7 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
       if (standA) {
         statsA.wins += standA.stats.wins;
         statsA.losses += standA.stats.losses;
+        statsA.ties += standA.stats.ties || 0;
         statsA.points += standA.stats.pointsFor;
         statsA.seasons++;
         statsA.ranks.push(standA.stats.rank);
@@ -213,6 +327,7 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
       if (standB) {
         statsB.wins += standB.stats.wins;
         statsB.losses += standB.stats.losses;
+        statsB.ties += standB.stats.ties || 0;
         statsB.points += standB.stats.pointsFor;
         statsB.seasons++;
         statsB.ranks.push(standB.stats.rank);
@@ -232,6 +347,46 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
   }, [managerA, managerB, data]);
 
   if (!managerA || !managerB || !comparison) return <div>Select managers</div>;
+
+  const comparisonRows = [
+    { 
+        label: 'Championships', 
+        valA: comparison.statsA.titles, 
+        valB: comparison.statsB.titles, 
+        winner: comparison.statsA.titles > comparison.statsB.titles ? 'A' : comparison.statsA.titles < comparison.statsB.titles ? 'B' : 'T',
+        icon: <Trophy className="w-3 h-3 text-yellow-500" />
+    },
+    { 
+        label: 'Overall Record', 
+        valA: `${comparison.statsA.wins}-${comparison.statsA.losses}${comparison.statsA.ties > 0 ? '-'+comparison.statsA.ties : ''}`, 
+        valB: `${comparison.statsB.wins}-${comparison.statsB.losses}${comparison.statsB.ties > 0 ? '-'+comparison.statsB.ties : ''}`,
+        winner: comparison.winPctA > comparison.winPctB ? 'A' : comparison.winPctA < comparison.winPctB ? 'B' : 'T'
+    },
+    {
+        label: 'Win Percentage',
+        valA: `${comparison.winPctA.toFixed(1)}%`,
+        valB: `${comparison.winPctB.toFixed(1)}%`,
+        winner: comparison.winPctA > comparison.winPctB ? 'A' : comparison.winPctA < comparison.winPctB ? 'B' : 'T'
+    },
+    {
+        label: 'Playoff Apps',
+        valA: comparison.statsA.playoffApps,
+        valB: comparison.statsB.playoffApps,
+        winner: comparison.statsA.playoffApps > comparison.statsB.playoffApps ? 'A' : comparison.statsA.playoffApps < comparison.statsB.playoffApps ? 'B' : 'T'
+    },
+    {
+        label: 'Avg Finish',
+        valA: `#${comparison.avgRankA.toFixed(1)}`,
+        valB: `#${comparison.avgRankB.toFixed(1)}`,
+        winner: comparison.avgRankA < comparison.avgRankB ? 'A' : comparison.avgRankA > comparison.avgRankB ? 'B' : 'T' // Lower is better
+    },
+    {
+        label: 'Total Points',
+        valA: Math.round(comparison.statsA.points).toLocaleString(),
+        valB: Math.round(comparison.statsB.points).toLocaleString(),
+        winner: comparison.statsA.points > comparison.statsB.points ? 'A' : comparison.statsA.points < comparison.statsB.points ? 'B' : 'T'
+    }
+  ];
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-12">
@@ -413,6 +568,173 @@ export const Versus: React.FC<VersusProps> = ({ data }) => {
             </AreaChart>
           </ResponsiveContainer>
         </div>
+      </div>
+
+      {/* --- CAREER STATS COMPARISON SECTION --- */}
+      <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+        <h3 className="text-white font-bold mb-6 flex items-center gap-2 text-lg">
+          <Scale className="w-5 h-5 text-indigo-400" />
+          Career Comparison
+        </h3>
+        
+        <div className="relative">
+          {/* Central Axis Line */}
+          <div className="absolute left-1/2 top-8 bottom-0 w-px bg-slate-700/50 -translate-x-1/2 hidden md:block"></div>
+
+          <div className="grid grid-cols-3 gap-4 mb-2 pb-2 border-b border-slate-700 text-xs font-bold uppercase tracking-wider text-slate-500">
+             <div className="text-center md:text-right md:pr-8">{managerA.name}</div>
+             <div className="text-center">Stat</div>
+             <div className="text-center md:text-left md:pl-8">{managerB.name}</div>
+          </div>
+
+          {comparisonRows.map((row, idx) => (
+             <div key={idx} className="grid grid-cols-3 gap-4 py-3 items-center hover:bg-slate-700/30 rounded transition-colors relative z-10">
+                <div className={`text-center md:text-right md:pr-8 font-bold ${row.winner === 'A' ? 'text-indigo-400' : 'text-slate-400'}`}>
+                   {row.valA}
+                </div>
+                <div className="text-center text-xs text-slate-500 uppercase font-semibold flex items-center justify-center gap-1">
+                   {row.icon} {row.label}
+                </div>
+                <div className={`text-center md:text-left md:pl-8 font-bold ${row.winner === 'B' ? 'text-purple-400' : 'text-slate-400'}`}>
+                   {row.valB}
+                </div>
+             </div>
+          ))}
+        </div>
+      </div>
+
+      {/* --- ALL-TIME RIVALRIES SECTION --- */}
+      <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-lg">
+         <div className="flex justify-between items-end mb-6">
+            <div>
+                <h3 className="text-white font-bold flex items-center gap-2 text-xl">
+                    <Users className="w-5 h-5 text-indigo-400" />
+                    All-Time Rivalries
+                </h3>
+                <p className="text-slate-400 text-sm mt-1">
+                    {managerA.name}'s career record vs every opponent.
+                </p>
+            </div>
+         </div>
+
+         {rivalries.length === 0 ? (
+             <div className="text-center py-12 border border-dashed border-slate-700 rounded-xl bg-slate-900/30">
+                 <div className="bg-slate-800 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4">
+                     <Database className="w-6 h-6 text-slate-500" />
+                 </div>
+                 <h3 className="text-lg font-bold text-white mb-2">No Matchup Data Found</h3>
+                 <p className="text-slate-400 max-w-sm mx-auto text-sm">
+                     We couldn't find any historical games for this manager. Try running the "Update" sync to fetch scoreboards.
+                 </p>
+             </div>
+         ) : (
+            <>
+                {/* --- NEW VISUALIZATION: WIN RATE CHART --- */}
+                <div className="mb-8 p-4 bg-slate-900/50 rounded-xl border border-slate-800">
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 text-center">Win Percentage by Opponent</h4>
+                    <div className="h-[300px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={rivalryChartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+                                <XAxis dataKey="shortName" stroke="#94a3b8" fontSize={10} interval={0} angle={-45} textAnchor="end" height={60} />
+                                <YAxis stroke="#94a3b8" fontSize={10} domain={[0, 100]} unit="%" />
+                                <Tooltip 
+                                    cursor={{fill: '#334155', opacity: 0.2}}
+                                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                                    itemStyle={{ color: '#e2e8f0' }}
+                                    formatter={(val: number, name: string, props: any) => [`${val.toFixed(1)}% (${props.payload.record})`, 'Win Rate']}
+                                />
+                                <ReferenceLine y={50} stroke="#94a3b8" strokeDasharray="3 3" />
+                                <Bar dataKey="winPct" radius={[4, 4, 0, 0]}>
+                                    {rivalryChartData.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.winPct >= 50 ? '#10b981' : '#ef4444'} />
+                                    ))}
+                                </Bar>
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {rivalries.map((r) => {
+                        const isNemesis = nemesis && nemesis.manager?.id === r.manager?.id && nemesis.winPct < 45;
+                        const isPigeon = pigeon && pigeon.manager?.id === r.manager?.id && pigeon.winPct > 55;
+                        const streakColor = r.currentStreak.type === 'W' ? 'text-emerald-400' : r.currentStreak.type === 'L' ? 'text-red-400' : 'text-slate-400';
+                        const streakLabel = r.currentStreak.type === 'W' ? 'Won' : r.currentStreak.type === 'L' ? 'Lost' : 'Tied';
+                        
+                        return (
+                            <div 
+                                key={r.manager?.id} 
+                                onClick={() => setManagerBId(r.manager!.id)}
+                                className={`
+                                    relative overflow-hidden rounded-xl border p-4 transition-all cursor-pointer group
+                                    ${r.manager?.id === managerB.id ? 'bg-indigo-900/20 border-indigo-500 ring-1 ring-indigo-500' : 'bg-slate-900/50 border-slate-700 hover:border-slate-500 hover:bg-slate-800'}
+                                `}
+                            >
+                                {/* Badges */}
+                                <div className="absolute top-0 right-0 flex">
+                                    {isNemesis && (
+                                        <div className="px-2 py-0.5 bg-red-500 text-white text-[9px] font-bold uppercase tracking-wider rounded-bl-lg flex items-center gap-1 shadow-lg">
+                                            <Skull className="w-3 h-3" /> Nemesis
+                                        </div>
+                                    )}
+                                    {isPigeon && (
+                                        <div className="px-2 py-0.5 bg-emerald-500 text-white text-[9px] font-bold uppercase tracking-wider rounded-bl-lg flex items-center gap-1 shadow-lg">
+                                            <Target className="w-3 h-3" /> Pigeon
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex items-center gap-3 mb-4">
+                                    <img src={r.manager?.avatar} alt="" className="w-10 h-10 rounded-full border border-slate-600 bg-slate-800" />
+                                    <div className="min-w-0">
+                                        <div className="text-white font-bold text-sm truncate pr-4">{r.manager?.name}</div>
+                                        <div className="text-slate-500 text-xs flex items-center gap-2">
+                                            <span>{r.games} Games</span>
+                                            {r.currentStreak.count > 0 && (
+                                                <span className={`font-bold ${streakColor} bg-slate-800 px-1.5 rounded text-[10px]`}>
+                                                    {streakLabel} {r.currentStreak.count}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 mb-3">
+                                    <div className="bg-slate-800/50 rounded p-1.5 text-center">
+                                        <div className="text-[10px] text-slate-500 uppercase">My Avg</div>
+                                        <div className="text-white font-mono font-bold text-sm">{(r.pf / r.games).toFixed(1)}</div>
+                                    </div>
+                                    <div className="bg-slate-800/50 rounded p-1.5 text-center">
+                                        <div className="text-[10px] text-slate-500 uppercase">Opp Avg</div>
+                                        <div className="text-white font-mono font-bold text-sm">{(r.pa / r.games).toFixed(1)}</div>
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-between items-end border-t border-slate-700/50 pt-3">
+                                    <div className="flex items-baseline gap-1">
+                                        <span className={`text-2xl font-black ${r.winPct >= 50 ? 'text-indigo-400' : 'text-slate-400'}`}>
+                                            {r.wins}
+                                        </span>
+                                        <span className="text-slate-600 text-sm font-bold">-</span>
+                                        <span className={`text-2xl font-black ${r.winPct < 50 ? 'text-red-400' : 'text-slate-400'}`}>
+                                            {r.losses}
+                                        </span>
+                                        {r.ties > 0 && <span className="text-slate-600 text-xs ml-1">({r.ties}T)</span>}
+                                    </div>
+                                    <div className="text-right">
+                                        <div className={`text-sm font-bold ${r.winPct >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                            {r.winPct.toFixed(0)}%
+                                        </div>
+                                        <div className="text-[10px] text-slate-500 uppercase tracking-wider">Win Rate</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )
+                    })}
+                </div>
+            </>
+         )}
       </div>
 
     </div>
