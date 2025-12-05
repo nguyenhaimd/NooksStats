@@ -7,9 +7,19 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      // Polyfill process.env for the Google GenAI SDK and existing code compatibility
-      'process.env.API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY || process.env.API_KEY),
-      'process.env.YAHOO_CLIENT_ID': JSON.stringify(env.VITE_YAHOO_CLIENT_ID || process.env.YAHOO_CLIENT_ID),
+      // Polyfill process.env for compatibility and explicitly inject env vars
+      // We check both VITE_ prefixed and non-prefixed versions to be robust on Vercel
+      'process.env.API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || process.env.API_KEY || ""),
+      'process.env.YAHOO_CLIENT_ID': JSON.stringify(env.VITE_YAHOO_CLIENT_ID || env.YAHOO_CLIENT_ID || process.env.YAHOO_CLIENT_ID || ""),
+      
+      // Inject Firebase Config
+      'process.env.FIREBASE_API_KEY': JSON.stringify(env.VITE_FIREBASE_API_KEY || env.FIREBASE_API_KEY || ""),
+      'process.env.FIREBASE_AUTH_DOMAIN': JSON.stringify(env.VITE_FIREBASE_AUTH_DOMAIN || env.FIREBASE_AUTH_DOMAIN || ""),
+      'process.env.FIREBASE_DATABASE_URL': JSON.stringify(env.VITE_FIREBASE_DATABASE_URL || env.FIREBASE_DATABASE_URL || ""),
+      'process.env.FIREBASE_PROJECT_ID': JSON.stringify(env.VITE_FIREBASE_PROJECT_ID || env.FIREBASE_PROJECT_ID || ""),
+      'process.env.FIREBASE_STORAGE_BUCKET': JSON.stringify(env.VITE_FIREBASE_STORAGE_BUCKET || env.FIREBASE_STORAGE_BUCKET || ""),
+      'process.env.FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(env.VITE_FIREBASE_MESSAGING_SENDER_ID || env.FIREBASE_MESSAGING_SENDER_ID || ""),
+      'process.env.FIREBASE_APP_ID': JSON.stringify(env.VITE_FIREBASE_APP_ID || env.FIREBASE_APP_ID || ""),
     },
   };
 });

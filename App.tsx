@@ -210,17 +210,42 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('firebase_config');
     if (saved) return JSON.parse(saved);
 
-    // Priority 2: Check Environment Variables (Vercel/Build time)
-    if (import.meta.env.VITE_FIREBASE_API_KEY) {
-      return {
-        apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-        authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-        databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
-        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-        storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-        messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-        appId: import.meta.env.VITE_FIREBASE_APP_ID
-      };
+    // Priority 2: Check Environment Variables injected via Vite 'define' or import.meta.env
+    try {
+      // Check explicitly injected process.env vars (from vite.config.ts)
+      // These are string replacements at build time, so process.env.X works even without process global
+      const envApiKey = process.env.FIREBASE_API_KEY;
+      const envDbUrl = process.env.FIREBASE_DATABASE_URL;
+
+      if (envApiKey && envDbUrl) {
+         return {
+            apiKey: envApiKey,
+            authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
+            databaseURL: envDbUrl,
+            projectId: process.env.FIREBASE_PROJECT_ID || '',
+            storageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
+            messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '',
+            appId: process.env.FIREBASE_APP_ID || ''
+         };
+      }
+
+      // Priority 3: Check standard import.meta.env for VITE_ prefixed vars
+      // @ts-ignore
+      if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_FIREBASE_API_KEY) {
+        // @ts-ignore
+        const meta = import.meta.env;
+        return {
+          apiKey: meta.VITE_FIREBASE_API_KEY,
+          authDomain: meta.VITE_FIREBASE_AUTH_DOMAIN,
+          databaseURL: meta.VITE_FIREBASE_DATABASE_URL,
+          projectId: meta.VITE_FIREBASE_PROJECT_ID,
+          storageBucket: meta.VITE_FIREBASE_STORAGE_BUCKET,
+          messagingSenderId: meta.VITE_FIREBASE_MESSAGING_SENDER_ID,
+          appId: meta.VITE_FIREBASE_APP_ID
+        };
+      }
+    } catch (e) {
+      console.warn("Env variables not available", e);
     }
 
     return null;
