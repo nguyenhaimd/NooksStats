@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ExternalLink, Key, Check, Loader2, ArrowLeft, ShieldCheck, Lock, AlertTriangle } from 'lucide-react';
+import { ExternalLink, Key, Check, Loader2, ArrowLeft, ShieldCheck, Lock, AlertTriangle, HelpCircle } from 'lucide-react';
 import { exchangeAuthCode } from '../services/yahooService';
 
 interface TokenHelperProps {
@@ -9,8 +9,8 @@ interface TokenHelperProps {
 }
 
 export const TokenHelper: React.FC<TokenHelperProps> = ({ onTokenGenerated, onCancel }) => {
-  const envClientId = process.env.YAHOO_CLIENT_ID || '';
-  const envClientSecret = process.env.YAHOO_CLIENT_SECRET || '';
+  const envClientId = (process.env.YAHOO_CLIENT_ID || '').trim();
+  const envClientSecret = (process.env.YAHOO_CLIENT_SECRET || '').trim();
 
   const [authCode, setAuthCode] = useState('');
   const [loading, setLoading] = useState(false);
@@ -22,8 +22,15 @@ export const TokenHelper: React.FC<TokenHelperProps> = ({ onTokenGenerated, onCa
         setError("System Error: Yahoo Client ID is not configured in the application environment.");
         return;
     }
-    // Using 'oob' (Out of Band) flow which is standard for installed/client-side apps
-    const authUrl = `https://api.login.yahoo.com/oauth2/request_auth?client_id=${envClientId}&redirect_uri=oob&response_type=code`;
+
+    // Robust URL construction
+    const params = new URLSearchParams();
+    params.append('client_id', envClientId);
+    params.append('redirect_uri', 'oob'); // Must be 'oob' (Installed App) or matching callback
+    params.append('response_type', 'code');
+    params.append('language', 'en-us'); // Helps prevent localization errors
+
+    const authUrl = `https://api.login.yahoo.com/oauth2/request_auth?${params.toString()}`;
     
     // Open in new window
     window.open(authUrl, 'YahooLogin', 'width=600,height=700,status=yes,scrollbars=yes');
@@ -34,9 +41,14 @@ export const TokenHelper: React.FC<TokenHelperProps> = ({ onTokenGenerated, onCa
 
   const handleExchange = async () => {
       if (!authCode || authCode.length < 4) {
-          setError("Invalid code. Please ensure you copied the entire 7-character code from Yahoo.");
+          setError("Invalid code. Please ensure you copied the entire code from Yahoo.");
           return;
       }
+      if (!envClientSecret) {
+          setError("System Error: Yahoo Client Secret is not configured.");
+          return;
+      }
+
       setLoading(true);
       setError(null);
       try {
@@ -96,9 +108,16 @@ export const TokenHelper: React.FC<TokenHelperProps> = ({ onTokenGenerated, onCa
                         <ExternalLink className="w-5 h-5 opacity-70 group-hover:opacity-100" />
                      </button>
                      
-                     {!envClientId && (
+                     {!envClientId ? (
                          <div className="mt-6 p-3 bg-slate-800/50 rounded-lg text-xs text-slate-500 border border-slate-700">
                              <strong>Config Missing:</strong> YAHOO_CLIENT_ID not found in environment.
+                         </div>
+                     ) : (
+                         <div className="mt-6 flex items-start gap-2 text-left text-[10px] text-slate-500 p-2 border border-slate-800 rounded">
+                             <HelpCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                             <p>
+                                 Getting an "Uh oh" error? Ensure your Yahoo App is configured with <code>oob</code> as a Redirect URI (select "Installed Application" in Yahoo Developer Console).
+                             </p>
                          </div>
                      )}
                  </div>
