@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
       // We check both VITE_ prefixed and non-prefixed versions to be robust on Vercel
       'process.env.API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || process.env.API_KEY || ""),
       'process.env.YAHOO_CLIENT_ID': JSON.stringify(env.VITE_YAHOO_CLIENT_ID || env.YAHOO_CLIENT_ID || process.env.YAHOO_CLIENT_ID || ""),
+      'process.env.YAHOO_CLIENT_SECRET': JSON.stringify(env.VITE_YAHOO_CLIENT_SECRET || env.YAHOO_CLIENT_SECRET || process.env.YAHOO_CLIENT_SECRET || ""),
       
       // Inject Firebase Config
       'process.env.FIREBASE_API_KEY': JSON.stringify(env.VITE_FIREBASE_API_KEY || env.FIREBASE_API_KEY || ""),

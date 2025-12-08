@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw, ListFilter, CheckSquare, Database, RefreshCw, PlusCircle, ArrowRight, Terminal } from 'lucide-react';
+import { LayoutDashboard, Table2, History, Trophy, Crown, ArrowUpRight, Key, Loader2, AlertCircle, Settings, Link as LinkIcon, CheckCircle2, Gavel, UserPlus, Swords, ChevronRight, Copy, ExternalLink, Save, RotateCcw, ListFilter, CheckSquare, Database, RefreshCw, PlusCircle, ArrowRight, Terminal, Wrench } from 'lucide-react';
 import { fetchYahooData, fetchUserLeagues, LogType } from './services/yahooService';
 import { initFirebase, saveLeagueToFirebase, fetchLeagueFromFirebase, fetchLeagueList, FirebaseConfig } from './services/firebaseService';
 import { LeagueData, ViewState, LeagueSummary } from './types';
@@ -10,6 +10,7 @@ import { LeagueRecords } from './components/LeagueRecords';
 import { Versus } from './components/Versus';
 import { DraftHistory } from './components/DraftHistory';
 import { AdvancedStats } from './components/AdvancedStats';
+import { TokenHelper } from './components/TokenHelper';
 
 // --- SUB COMPONENTS ---
 
@@ -49,10 +50,28 @@ const SyncModal: React.FC<SyncModalProps> = ({
   onClose
 }) => {
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const [showInternalGenerator, setShowInternalGenerator] = useState(false);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  if (showInternalGenerator) {
+      return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+             <div className="bg-slate-900 border border-slate-700 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden h-[600px] flex flex-col">
+                 <TokenHelper 
+                    defaultClientId={process.env.YAHOO_CLIENT_ID || ''}
+                    onTokenGenerated={(token) => {
+                        setYahooToken(token);
+                        setShowInternalGenerator(false);
+                    }}
+                    onCancel={() => setShowInternalGenerator(false)}
+                 />
+             </div>
+          </div>
+      );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
@@ -82,14 +101,22 @@ const SyncModal: React.FC<SyncModalProps> = ({
                  <p className="text-slate-300 text-sm mb-3">
                    Visit the secure token generator to authenticate with Yahoo and copy your access token.
                  </p>
-                 <a 
-                   href="https://lemon-dune-0cd4b231e.azurestaticapps.net/" 
-                   target="_blank" 
-                   rel="noopener noreferrer"
-                   className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors"
-                 >
-                   Open Token Generator <ExternalLink className="w-3 h-3" />
-                 </a>
+                 <div className="flex flex-col sm:flex-row gap-3">
+                    <a 
+                        href="https://lemon-dune-0cd4b231e.azurestaticapps.net/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex-1 inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors"
+                    >
+                        Open Token Generator <ExternalLink className="w-3 h-3" />
+                    </a>
+                    <button
+                        onClick={() => setShowInternalGenerator(true)}
+                        className="inline-flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-bold transition-colors border border-slate-600"
+                    >
+                        <Wrench className="w-3 h-3" /> Token Generator (Failsafe)
+                    </button>
+                 </div>
                </div>
 
                <div>

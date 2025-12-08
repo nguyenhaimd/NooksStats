@@ -56,6 +56,39 @@ const fetchWithRetry = async (url: string, accessToken: string, retries = 5, bac
   }
 };
 
+// --- AUTH HELPER ---
+
+export const exchangeAuthCode = async (clientId: string, clientSecret: string, code: string): Promise<string> => {
+  const url = 'https://api.login.yahoo.com/oauth2/get_token';
+  const creds = btoa(`${clientId}:${clientSecret}`);
+  
+  const body = new URLSearchParams();
+  body.append('grant_type', 'authorization_code');
+  body.append('redirect_uri', 'oob');
+  body.append('code', code);
+
+  try {
+    const response = await fetch(`${PROXY_URL}${encodeURIComponent(url)}`, {
+      method: 'POST',
+      headers: {
+          'Authorization': `Basic ${creds}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    });
+
+    const json = await response.json();
+    
+    if (json.error) {
+       throw new Error(`Yahoo API Error: ${json.error_description || json.error}`);
+    }
+    
+    return json.access_token;
+  } catch (e: any) {
+    throw new Error(`Token Exchange Failed: ${e.message}`);
+  }
+};
+
 // --- HELPER FUNCTIONS FOR ROBUST PARSING ---
 
 // Safely extracts a property from a node, handling Objects, Arrays, and "0" wrappers
