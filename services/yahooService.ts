@@ -181,47 +181,60 @@ const getTeamPoints = (teamData: any): number => {
 // ---------------------------------------------
 
 export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSummary[]> => {
-  // Fetch leagues across all known NFL game keys to build a history
-  const keysString = NFL_GAME_KEYS.join(',');
-  const url = `${BASE_URL}/users;use_login=1/games;game_keys=${keysString}/leagues?format=json`;
-
-  const response = await fetchWithRetry(url, accessToken);
-
-  if (!response.ok) {
-     const text = await response.text();
-     throw new Error(`Yahoo API Error (${response.status}): ${text.substring(0, 100)}`);
-  }
-
-  const json = await response.json();
   const leagues: LeagueSummary[] = [];
-  
-  const gamesNode = json?.fantasy_content?.users?.[0]?.user?.find((x: any) => x.games)?.games;
-  if (!gamesNode) return [];
 
-  const gameCount = gamesNode.count;
-  for (let i = 0; i < gameCount; i++) {
-    const gameWrapper = gamesNode[i + ""]?.game;
-    if (!gameWrapper) continue;
+  const fetchLeaguesForGame = async (gameKey: number) => {
+    try {
+      const url = `${BASE_URL}/users;use_login=1/games;game_keys=${gameKey}/leagues?format=json`;
+      const response = await fetchWithRetry(url, accessToken, 2, 1000); // fewer retries for discovery
 
-    const gameMeta = gameWrapper[0];
-    const seasonYear = parseInt(gameMeta.season);
-    
-    const leaguesNode = gameWrapper.find((x: any) => x.leagues)?.leagues;
-    if (!leaguesNode) continue;
+      if (!response.ok) {
+        // Yahoo returns 404 if the game key has no user data or is not found
+        if (response.status === 404) return;
+        const text = await response.text();
+        console.warn(`Yahoo API Error (${response.status}) for game ${gameKey}: ${text.substring(0, 100)}`);
+        return;
+      }
 
-    const leagueCount = leaguesNode.count;
-    for (let j = 0; j < leagueCount; j++) {
-       const leagueObj = leaguesNode[j + ""]?.league;
-       if (!leagueObj) continue;
-       
-       const meta = leagueObj[0];
-       leagues.push({
-         key: meta.league_key,
-         name: meta.name,
-         year: seasonYear,
-         logo: meta.logo_url
-       });
+      const json = await response.json();
+      const gamesNode = json?.fantasy_content?.users?.[0]?.user?.find((x: any) => x.games)?.games;
+      if (!gamesNode) return;
+
+      const gameCount = gamesNode.count;
+      for (let i = 0; i < gameCount; i++) {
+        const gameWrapper = gamesNode[i + ""]?.game;
+        if (!gameWrapper) continue;
+
+        const gameMeta = gameWrapper[0];
+        const seasonYear = parseInt(gameMeta.season);
+        
+        const leaguesNode = gameWrapper.find((x: any) => x.leagues)?.leagues;
+        if (!leaguesNode) continue;
+
+        const leagueCount = leaguesNode.count;
+        for (let j = 0; j < leagueCount; j++) {
+           const leagueObj = leaguesNode[j + ""]?.league;
+           if (!leagueObj) continue;
+           
+           const meta = leagueObj[0];
+           leagues.push({
+             key: meta.league_key,
+             name: meta.name,
+             year: seasonYear,
+             logo: meta.logo_url
+           });
+        }
+      }
+    } catch (e) {
+      console.warn(`Failed to fetch leagues for game ${gameKey}`, e);
     }
+  };
+
+  // Run in chunks to avoid overwhelming the Yahoo API or proxy
+  const CHUNK_SIZE = 5;
+  for (let i = 0; i < NFL_GAME_KEYS.length; i += CHUNK_SIZE) {
+    const chunk = NFL_GAME_KEYS.slice(i, i + CHUNK_SIZE);
+    await Promise.all(chunk.map(fetchLeaguesForGame));
   }
 
   // Sort by year desc

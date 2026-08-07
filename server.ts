@@ -19,6 +19,7 @@ async function startServer() {
     }
 
     try {
+      console.log(`[PROXY] Forwarding ${req.method} request to: ${targetUrl}`);
       // Forward all headers except host and connection
       const fetchHeaders: Record<string, string> = {};
       
@@ -44,6 +45,10 @@ async function startServer() {
 
       const response = await fetch(targetUrl, fetchOptions);
       const text = await response.text();
+      console.log(`[PROXY] Response status from ${targetUrl}: ${response.status}`);
+      if (response.status >= 400) {
+         console.log(`[PROXY] Error Response body: ${text.substring(0, 200)}`);
+      }
       
       // Try to parse as JSON if it is JSON
       try {
