@@ -1,7 +1,7 @@
 
 import { LeagueData, Manager, Season, ManagerSeason, DraftPick, Transaction, LeagueSummary, Game } from '../types';
 
-const PROXY_URL = 'https://corsproxy.io/?';
+const PROXY_URL = '/api/proxy?url=';
 const BASE_URL = 'https://fantasysports.yahooapis.com/fantasy/v2';
 
 // Game IDs for NFL Fantasy Football from 2011 to 2025
