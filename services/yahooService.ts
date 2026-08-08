@@ -58,13 +58,13 @@ const fetchWithRetry = async (url: string, accessToken: string, retries = 5, bac
 
 // --- AUTH HELPER ---
 
-export const exchangeAuthCode = async (clientId: string, clientSecret: string, code: string): Promise<string> => {
+export const exchangeAuthCode = async (clientId: string, clientSecret: string, code: string, redirectUri: string = 'oob'): Promise<string> => {
   const url = 'https://api.login.yahoo.com/oauth2/get_token';
   const creds = btoa(`${clientId}:${clientSecret}`);
   
   const body = new URLSearchParams();
   body.append('grant_type', 'authorization_code');
-  body.append('redirect_uri', 'oob');
+  body.append('redirect_uri', redirectUri);
   body.append('code', code);
 
   try {
