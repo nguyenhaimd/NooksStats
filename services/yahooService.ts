@@ -190,6 +190,10 @@ export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSumma
       if (!gameWrapper) continue;
 
       const gameMeta = gameWrapper[0];
+      
+      // Filter strictly for NFL fantasy football
+      if (gameMeta.code !== 'nfl') continue;
+
       const seasonYear = parseInt(gameMeta.season);
       
       const leaguesNode = gameWrapper.find((x: any) => x.leagues)?.leagues;
@@ -212,8 +216,8 @@ export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSumma
   };
 
   try {
-    // Attempt 1: Use game_codes=nfl to dynamically fetch all NFL games the user has played
-    const url = `${BASE_URL}/users;use_login=1/games;game_codes=nfl/leagues?format=json`;
+    // Attempt 1: Fetch ALL games the user has ever played, across all sports, then filter locally for 'nfl'
+    const url = `${BASE_URL}/users;use_login=1/games/leagues?format=json`;
     const response = await fetchWithRetry(url, accessToken, 2, 1000);
     if (response.ok) {
       const json = await response.json();
@@ -223,7 +227,7 @@ export const fetchUserLeagues = async (accessToken: string): Promise<LeagueSumma
       }
     }
   } catch (e) {
-    console.warn("Failed to fetch leagues using game_codes=nfl", e);
+    console.warn("Failed to fetch leagues using all games endpoint", e);
   }
 
   // Attempt 2: If the dynamic fetch returned no leagues (or failed), fallback to polling known/guessed keys
